@@ -1,112 +1,168 @@
 #!/usr/bin/env python3
 import io
+from pathlib import Path
 import time
 import psutil
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 from liquidctl import find_liquidctl_devices
-from pynvml import *
-
-def get_kraken_device():
-    # Look specifically for the Elite
-    for dev in find_liquidctl_devices():
-        if "Kraken" in dev.description:
-            dev.connect()
-            # initialize() is often required to wake the interface for control
-            dev.initialize()
-            return dev
-    return None
+import pynvml
+import matplotlib.pyplot as plt
 
 
-def get_cpu_temp():
-    temps = psutil.sensors_temperatures()
-    # Common keys: 'coretemp' (Intel), 'k10temp' (AMD), 'cpu_thermal' (Raspberry Pi)
-    for name in ['coretemp', 'k10temp', 'cpu_thermal']:
-        if name in temps:
-            # Returns the temperature of the first package/core
-            return temps[name][0].current
-    return 0.0
+
+def get_font(size = 30):
+    cwd = Path(__file__).parent
+    return ImageFont.truetype(cwd / "fonts/Audiowide-Regular.ttf", size)
+
+def to_px(val):
+    """Converts NZXT normalized coordinates to pixel coordinates."""
+    return 320 + (val * 320)
 
 
-def get_gpu_temp_nvidia(handle):
-    try:
-        temp = nvmlDeviceGetTemperature(handle, NVML_TEMPERATURE_GPU)
-        return temp
-    except:
-        return 0.0
+
+class Kraken():
+    def __init__(self, debug = False):
+        self.debug = debug
+        if not debug:
+            # Initialize device
+            for dev in find_liquidctl_devices():
+                if "Kraken" in dev.description:
+                    try:
+                        dev.connect()
+                        dev.initialize()
+                        self.device = dev
+                    except Exception as e:
+                        if "langid" in str(e) or "Access denied" in str(e):
+                            print("Error: Permission denied. Please check your udev rules or run with sudo.")
+                        else:
+                            print(f"Error connecting to device: {e}")
+        else:
+            self.fig, self.ax = plt.subplots()
+            # self.ax.remove()
+
+        pynvml.nvmlInit()
+        self.nv_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+
+        self.cpu_temp = 0
+        self.gpu_temp = 0
+        self.liq_temp = 0
+        self.cpu_load = 0
+        self.gpu_load = 0
+
+        self.frame = None
+        self.bg_image = None
+
+        self.resolution = [640, 640]
+        self.angle = -60
+
+        self.fps = 20
 
 
-def create_frame(cpu_temp, gpu_temp, liq_temp, load, bg_image=None):
-    # Elite resolution is 640x640
-    if bg_image:
-        img = bg_image.convert('RGB').resize((640, 640))
-    else:
-        img = Image.new('RGB', (640, 640), color=(0, 0, 0))
-    
-    draw = ImageDraw.Draw(img)
-    
-    # Semi-transparent overlay for text readability if there's a background
-    if bg_image:
-        overlay = Image.new('RGBA', (640, 640), (0, 0, 0, 100))
-        img.paste(overlay, (0,0), overlay)
+    def update_cpu_temp(self):
+        temps = psutil.sensors_temperatures()
+        self.cpu_temp = temps['k10temp'][0].current
 
-    # Draw stats (Note: Default font is small, consider ImageFont.truetype for better looks)
-    draw.text((320, 200), f"LIQUID: {liq_temp:.1f}°C", fill=(0, 255, 130), anchor="mm", font_size=60)
-    draw.text((320, 300), f"CPU: {cpu_temp:.1f}°C ({load}%)", fill=(255, 255, 255), anchor="mm", font_size=40)
-    draw.text((320, 400), f"GPU: {gpu_temp:.1f}°C", fill=(255, 150, 0), anchor="mm", font_size=40)
 
-    # Rotate the image 30 degrees counter-clockwise
-    img = img.rotate(-60, resample=Image.BICUBIC)
+    def update_cpu_load(self):
+        self.cpu_load = psutil.cpu_percent()
 
-    return img
+
+    def update_gpu_temp(self):
+        self.gpu_temp = pynvml.nvmlDeviceGetTemperature(self.nv_handle, pynvml.NVML_TEMPERATURE_GPU)
+
+
+    def update_gpu_load(self):
+        self.gpu_load = pynvml.nvmlDeviceGetUtilizationRates(self.nv_handle).gpu
+
+
+    def update_all_stats(self):
+        self.update_cpu_temp()
+        self.update_cpu_load()
+        self.update_gpu_temp()
+        self.update_gpu_load()
+
+
+    def draw_frame(self):
+        self.update_all_stats()
+
+        colors = {
+            "bg": (0,0,0),  # black
+            "liquid": (97, 103, 131, 255),  # dark grey
+            "widget_front": (0, 255, 255, 255),  # ice blue
+            "numbers": (255, 255,255, 255), # white
+        }
+
+        # Canvas resolution for Kraken Elite
+        self.frame = Image.new('RGBA', self.resolution, color=colors["bg"])
+        draw = ImageDraw.Draw(self.frame)
+
+        if self.debug:
+            draw.rectangle((0,0,640,640), fill="red")
+            draw.circle((320,320),320, fill=colors["bg"])
+
+        # 1. Background Media
+        if self.bg_image:
+            # Scale 1.22 and Offset Y -0.352 from JSON
+            bg_w, bg_h = self.bg_image.size
+            new_w = int(640 * 1.22)
+            new_h = int(640 * 1.22)
+            bg_resized = self.bg_image.resize((new_w, new_h))
+            offset_y = int(-0.352 * 320)
+            self.frame.paste(bg_resized, (320 - new_w // 2, 320 - new_h // 2 + offset_y))
+
+        # 2. Liquid Temp Circle (Infographic)
+        # Color from JSON: RGB(97, 103, 131)
+        # color = (97, 103, 131)  # 
+        # liquid_color = (97, 103, 131)
+        # The circle fills the 640x640 area based on liquid temp
+        # fill_height = int((liq_temp / 100) * 640)
+        # draw.ellipse([0, 0, 640, 640], outline=None, fill=(20, 20, 30)) # Background sphere
+        # draw.chord([0, 0, 640, 640], start=180, end=0, fill=colors["liquid"]) # Wave approximation
+
+        # 3. Arcs (CPU and GPU Load)
+        # CPU Arc: x: -0.194, y: -0.5557, size: 250, angle: 185
+        cpu_arc_box = [to_px(-0.194) - 125, to_px(-0.5557) - 125, to_px(-0.194) + 125, to_px(-0.5557) + 125]
+        draw.arc(cpu_arc_box, start=135, end=135 + (self.cpu_load / 100 * 185), fill=colors["widget_front"], width=30)
+
+        # GPU Arc: x: 0.1938, y: 0.5563, size: 250, angle: 185
+        gpu_arc_box = [to_px(0.1938) - 125, to_px(0.5563) - 125, to_px(0.1938) + 125, to_px(0.5563) + 125]
+        draw.arc(gpu_arc_box, start=315, end=315 + (self.gpu_load / 100 * 185), fill=colors["widget_front"], width=30)
+
+        # 4. Metrics (CPU and GPU Temp)
+        # CPU Temp: x: 0.0855, y: -0.3938, fontSize: 120
+        draw.text((to_px(0.0855), to_px(-0.3938)), f"{int(self.cpu_temp)}°C", 
+                    font=get_font(120), fill=colors["numbers"], anchor="mm")
+
+        # GPU Temp: x: -0.0844, y: 0.3938, fontSize: 120
+        draw.text((to_px(-0.0844), to_px(0.3938)), f"{int(self.gpu_temp)}°C", 
+                    font=get_font(120), fill=colors["numbers"], anchor="mm")
+
+        # 5. Icons (CPU and GPU)
+        draw.text((to_px(0.7403), to_px(-0.0736)), "CPU", font=get_font(30), fill=colors["numbers"], anchor="mm")
+        draw.text((to_px(-0.7406), to_px(0.075)), "GPU", font=get_font(30), fill=colors["numbers"], anchor="mm")
+
+        # Final Rotation (If needed for hardware mounting orientation)
+        if not self.debug:
+            self.frame = self.frame.rotate(self.angle, resample=Image.BICUBIC)
+
+
+    def display(self):
+        if not self.debug:
+            with io.BytesIO() as buffer:
+                self.frame.save(buffer, format='PNG')
+                buffer.seek(0)
+                self.device.set_screen('lcd', 'static', buffer)
+            time.sleep(1./self.fps)
+        else:
+            plt.ion()
+            self.ax.imshow(self.frame)
+            plt.draw()
+            plt.pause(1./self.fps)
+
 
 
 if __name__ == "__main__":
-    kraken = get_kraken_device()
-    
-    # Initialize NVML once
-    try:
-        nvmlInit()
-        nv_handle = nvmlDeviceGetHandleByIndex(0)
-    except:
-        nv_handle = None
-
-    # Optional: Load a GIF to use as background frames
-    # gif = Image.open("your_animation.gif")
-    # frame_count = 0
-
-    if kraken:
-        try:
-            print(f"Connected to {kraken.description}")
-            while True:
-                # 1. Gather Data
-                cpu_load = psutil.cpu_percent()
-                cpu_temp = get_cpu_temp()
-                gpu_temp = get_gpu_temp_nvidia(nv_handle) if nv_handle else 0
-                
-                raw_status = kraken.get_status()
-                liq_temp = 0
-                for desc, val, unit in raw_status:
-                    if "Liquid temperature" in desc:
-                        liq_temp = val
-                        break
-                
-                # 2. Render (Pass a background frame if desired)
-                frame = create_frame(cpu_temp, gpu_temp, liq_temp, cpu_load)
-                
-                # 3. Push to LCD
-                # The driver expects a file-like object with a .read() method
-                with io.BytesIO() as buffer:
-                    frame.save(buffer, format='PNG')
-                    buffer.seek(0)
-                    kraken.set_screen('lcd', 'static', buffer)
-                
-                time.sleep(0.5) # Refresh slightly faster for smoother updates
-
-        except KeyboardInterrupt:
-            print("\nExiting...")
-        finally:
-            kraken.disconnect()
-            if nv_handle:
-                nvmlShutdown()
-    else:
-        print("No Kraken Elite found!")
+    kraken = Kraken(debug=False)
+    while True:
+        kraken.draw_frame()
+        kraken.display()
