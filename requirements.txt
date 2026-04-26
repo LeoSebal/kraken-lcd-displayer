@@ -1,3 +1,6 @@
 psutil
 pillow
 liquidctl
+nvidia-ml-py  # for Nvidia GPU load & temps
+matplotlib  # for debug display
+pyyaml
