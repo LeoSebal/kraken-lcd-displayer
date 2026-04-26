@@ -97,7 +97,7 @@ class Kraken():
 
         self._bg_image = None
         self._angle = 30
-        self._fps = 30
+        self._fps = 4
         self._last_tick = time.time()
 
 
@@ -286,10 +286,18 @@ class Kraken():
                 frame.save(buffer, format='BMP')
                 buffer.seek(0)
                 try:
-                    self.device.set_screen('lcd', 'static', buffer)
-                except:
+                    self.device.set_screen('lcd', 'gif', buffer)
+                except Exception as e:
                     # If the pump is busy or the USB bus is choked, wait before retrying
-                    time.sleep(0.1)
+                    if "bucket" in str(e).lower():
+                        print(e, "Bucket sync lost. Resetting HID handshake...")
+                        self.device.disconnect()
+                        self.device.connect() 
+                        self.device.initialize()
+                        # Try once more after reset
+                        self.device.set_screen('lcd', 'gif', buffer)
+                    else:
+                        print(e)
         else:
             plt.ion()
             self._ax.imshow(self._frame)
