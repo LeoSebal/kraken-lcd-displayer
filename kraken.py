@@ -95,6 +95,11 @@ class Kraken():
         self._liq_temp = 0
         self._cpu_load = 0
         self._gpu_load = 0
+        self._update_cpu_temp = False
+        self._update_gpu_temp = False
+        self._update_liq_temp = False
+        self._update_cpu_load = False
+        self._update_gpu_load = False
 
         self._resolution = (WIDTH, HEIGHT)
         self._frame = None
@@ -103,9 +108,8 @@ class Kraken():
 
         self._bg_image = None
         self._angle = 30
-        self._fps = 20
+        self._fps = 1
         self._last_tick = time.time()
-        self._last_stats_update = 0
 
 
     @property
@@ -187,12 +191,10 @@ class Kraken():
             self._last_stats_update = now
 
 
-    def _get_cpu_layer(self, rect_width, line_width, R, font_size, small_font_size,
+    def _draw_cpu_widget(self, canvas_draw, rect_width, line_width, R, font_size, small_font_size,
         arc_length):
 
-        # 1. Initialize canvas
-        cpu_layer = Image.new('RGBA', self._resolution, color=(0, 0, 0, 0))
-        cpu_widget = ImageDraw.Draw(cpu_layer)
+        cpu_widget = canvas_draw
         # 2. CPU anchors
         A = to_px(-0.5, 1/10)  # left anchor
         B = (A[0] + rect_width, A[1])  # right anchor
@@ -214,17 +216,14 @@ class Kraken():
         d.text((0, 0), "CPU",
                 font=get_font(small_font_size), fill=self.colors["numbers"], anchor="lt")
         cpu_txt = cpu_txt.rotate(90, expand=1)
-        cpu_layer.paste(cpu_txt, (A[0] - R//2, A[1] - int(R*1.6)), cpu_txt)
+        # Using the internal frame reference instead of a layer
+        self._frame.paste(cpu_txt, (A[0] - R//2, A[1] - int(R*1.6)), cpu_txt)
 
-        return cpu_layer
 
-
-    def _get_gpu_layer(self, rect_width, line_width, R, font_size, small_font_size,
+    def _draw_gpu_widget(self, canvas_draw, rect_width, line_width, R, font_size, small_font_size,
         arc_length):
 
-        # 1. Initialize canvas
-        gpu_layer = Image.new('RGBA', self._resolution, color=(0, 0, 0, 0))
-        gpu_widget = ImageDraw.Draw(gpu_layer)
+        gpu_widget = canvas_draw
         # 2. GPU anchors
         D = to_px(0.5, -1/10)  # right anchor
         C = (D[0] - rect_width, D[1])  # left anchor
@@ -246,9 +245,8 @@ class Kraken():
         d.text((0, 0), "GPU",
                 font=get_font(small_font_size), fill=self.colors["numbers"], anchor="lt")
         gpu_txt = gpu_txt.rotate(-90, expand=1)
-        gpu_layer.paste(gpu_txt, (D[0] - R//2, D[1] + int(R*0.6)), gpu_txt)
+        self._frame.paste(gpu_txt, (D[0] - R//2, D[1] + int(R*0.6)), gpu_txt)
 
-        return gpu_layer
 
 
     def draw_frame(self):
@@ -284,13 +282,10 @@ class Kraken():
         small_font_size = 30  # pt
         arc_length = 170  # degrees
 
-        # 4. Generate widget layers
-        cpu_layer = self._get_cpu_layer(rect_width, line_width, R, font_size, small_font_size, arc_length)
-        gpu_layer = self._get_gpu_layer(rect_width, line_width, R, font_size, small_font_size, arc_length)
+        # 4. Draw directly onto the main frame
+        self._draw_cpu_widget(main_draw, rect_width, line_width, R, font_size, small_font_size, arc_length)
+        self._draw_gpu_widget(main_draw, rect_width, line_width, R, font_size, small_font_size, arc_length)
 
-        # 5. Composite Layers
-        self._frame.paste(cpu_layer, (0, 0), cpu_layer)
-        self._frame.paste(gpu_layer, (0, 0), gpu_layer)
 
 
     def display(self):
@@ -317,8 +312,13 @@ class Kraken():
         delay = (1.0 / self._fps) - elapsed
         if self.debug:
             plt.pause(max(0.001, delay))
-        elif delay > 0:
-            time.sleep(delay)
+        i = 0
+        while delay < 0:
+            delay += 1.0 / self._fps
+            i += 1
+        print(f"skipped {i} frames")
+        i = 0
+        time.sleep(delay)
         self._last_tick = time.time()
 
 
