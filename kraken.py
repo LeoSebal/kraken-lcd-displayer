@@ -17,10 +17,16 @@ HEIGHT = 640
 WIDTH = 640
 RADIUS = 320
 
+RAM_PATH = "/dev/shm/frame.png"
 
-def get_font(size = 30):
-    cwd = Path(__file__).parent
-    return ImageFont.truetype(cwd / "fonts/Audiowide-Regular.ttf", size)
+
+_FONT_CACHE = {}
+
+def get_font(size=30):
+    if size not in _FONT_CACHE:
+        cwd = Path(__file__).parent
+        _FONT_CACHE[size] = ImageFont.truetype(str(cwd / "fonts/Audiowide-Regular.ttf"), size)
+    return _FONT_CACHE[size]
 
 def to_px(x,y):
     """Converts (-1,1:1,1) axis coordinates to pixel coordinates."""
@@ -97,8 +103,9 @@ class Kraken():
 
         self._bg_image = None
         self._angle = 30
-        self._fps = 4
+        self._fps = 20
         self._last_tick = time.time()
+        self._last_stats_update = 0
 
 
     @property
@@ -108,7 +115,7 @@ class Kraken():
     @brightness.setter
     def set_brightness(self, brightness:int):
         if 0 <= brightness <= 100:
-            self._brightness = _brightness
+            self._brightness = brightness
             self.device.set_brightness(brightness)
         else:
             raise ValueError(f"Brightness must be between 0 and 100, not {brightness}")
@@ -116,12 +123,12 @@ class Kraken():
 
     @property
     def bg_image(self):
-        return self.bg_image
+        return self._bg_image
 
     @bg_image.setter
     def set_bg_image(self, bg_image):
-        if Path(bg_image).exists():
-            self._bg_image = bg_image
+        if bg_image and Path(bg_image).exists():
+            self._bg_image = Image.open(bg_image)
         else:
             raise FileNotFoundError(bg_image)
 
@@ -151,7 +158,10 @@ class Kraken():
 
     def update_cpu_temp(self):
         temps = psutil.sensors_temperatures()
-        self._cpu_temp = temps['k10temp'][0].current
+        if 'k10temp' in temps:
+            self._cpu_temp = temps['k10temp'][0].current
+        elif 'coretemp' in temps:
+            self._cpu_temp = temps['coretemp'][0].current
 
 
     def update_cpu_load(self):
@@ -166,11 +176,15 @@ class Kraken():
         self._gpu_load = pynvml.nvmlDeviceGetUtilizationRates(self._nv_handle).gpu
 
 
-    def update_all_stats(self):
-        self.update_cpu_temp()
-        self.update_cpu_load()
-        self.update_gpu_temp()
-        self.update_gpu_load()
+    def update_all_stats(self, force=False):
+        now = time.time()
+        # Only poll hardware sensors once per second
+        if force or (now - self._last_stats_update >= 1.0):
+            self.update_cpu_temp()
+            self.update_cpu_load()
+            self.update_gpu_temp()
+            self.update_gpu_load()
+            self._last_stats_update = now
 
 
     def _get_cpu_layer(self, rect_width, line_width, R, font_size, small_font_size,
@@ -286,16 +300,11 @@ class Kraken():
                 frame.save(buffer, format='BMP')
                 buffer.seek(0)
                 try:
-                    self.device.set_screen('lcd', 'gif', buffer)
+                    self.device.set_screen('lcd', 'static', buffer)
                 except Exception as e:
-                    # If the pump is busy or the USB bus is choked, wait before retrying
+                    # If the pump is busy or the USB bus is choked, let the USB bus clear
                     if "bucket" in str(e).lower():
-                        print(e, "Bucket sync lost. Resetting HID handshake...")
-                        self.device.disconnect()
-                        self.device.connect() 
-                        self.device.initialize()
-                        # Try once more after reset
-                        self.device.set_screen('lcd', 'gif', buffer)
+                        time.sleep(0.1)
                     else:
                         print(e)
         else:
