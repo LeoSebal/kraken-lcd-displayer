@@ -7,6 +7,7 @@ import warnings
 import psutil
 import argparse
 import yaml
+import threading
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 from liquidctl import find_liquidctl_devices
 import pynvml
@@ -80,41 +81,6 @@ class Kraken():
         self._gpu_load = 0
 
         self._resolution = (WIDTH, HEIGHT)
-        self._frame = None
-
-        # Initialize widgets
-        rect_width = int(1.09375 * RADIUS)  # 350 px
-        line_width = int(0.0625 * RADIUS)   # 20 px
-        arc_radius = int(0.28125 * RADIUS)  # 90 px
-        font_path = str(Path(__file__).parent / "fonts/Audiowide-Regular.ttf")
-
-        A = to_px(-0.5, 0.1)
-        D = to_px(0.5, -0.1)
-
-        self.widgets = {
-            "cpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.cpu_temp),
-            "cpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, start_angle=90, data_updater=lambda: self.cpu_load),
-            "cpu_temp_text": widgets.Text(lambda: f"{int(self.cpu_temp)}°C", font_path, 120),
-            "gpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.gpu_temp),
-            "gpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, start_angle=270, data_updater=lambda: self.gpu_load),
-            "gpu_temp_text": widgets.Text(lambda: f"{int(self.gpu_temp)}°C", font_path, 120),
-        }
-
-        # Define placement: (x, y) coordinates and which edge to align (offset from center)
-        self.widget_configs = {
-            "cpu_temp_line": (A[0], A[1], "left"),
-            "cpu_load_arc": (A[0], A[1] - arc_radius, "center"),
-            "cpu_temp_text": (A[0], A[1] - arc_radius, "left"),
-            "gpu_temp_line": (D[0] - rect_width, D[1], "left"),
-            "gpu_load_arc": (D[0], D[1] + arc_radius, "center"),
-            "gpu_temp_text": (D[0], D[1] + arc_radius, "right"),
-        }
-
-        self._brightness = 50
-        self.colors = {
-            "debug": "#9A4CB8",
-            "bg": (0, 0, 0, 255)
-        }
 
         self._bg_image = None
         self._angle = 30
@@ -122,7 +88,8 @@ class Kraken():
         self._last_stats_update = 0
         self._last_tick = time.time()
 
-        self._bg = Image.new('RGBA', self._resolution, color=(0, 0, 0))  # black background
+        self.frame = Image.new('RGBA', self._resolution, color=(0, 0, 0, 255))
+        self._bg = Image.new('RGBA', self._resolution, color=(0, 0, 0, 255))  # black background
         self._fg = Image.new('RGBA', self._resolution, color=(0, 0, 0, 0))  # transparent widget layer
         self.init_frame()
 
@@ -197,8 +164,40 @@ class Kraken():
 
 
     def init_frame(self):
-        # self.update_all_stats()
-        self._frame = Image.new('RGBA', (WIDTH, HEIGHT), color="#000000")
+
+        # Initialize widgets
+        rect_width = int(1.09375 * RADIUS)  # 350 px
+        line_width = int(0.0625 * RADIUS)   # 20 px
+        arc_radius = int(0.28125 * RADIUS)  # 90 px
+        font_path = str(Path(__file__).parent / "fonts/Audiowide-Regular.ttf")
+
+        A = to_px(-0.5, 0.1)
+        D = to_px(0.5, -0.1)
+
+        self.widgets = {
+            "cpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.cpu_temp),
+            "cpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, data_updater=lambda: self.cpu_load, rot=0),
+            "cpu_temp_text": widgets.Text(lambda: f"{int(self.cpu_temp)}°C", font_path, 120),
+            "gpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.gpu_temp, rot=180),
+            "gpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, data_updater=lambda: self.gpu_load, rot=180),
+            "gpu_temp_text": widgets.Text(lambda: f"{int(self.gpu_temp)}°C", font_path, 120, align="right"),
+        }
+
+        # Define placement: (x, y) coordinates and which edge to align (offset from center)
+        self.widget_configs = {
+            "cpu_temp_line": (A[0], A[1], "left", 0),
+            "cpu_load_arc":  (A[0], A[1] - arc_radius + line_width//2, "center", 0),
+            "cpu_temp_text": (A[0], A[1] - arc_radius, "left", 0),
+            "gpu_temp_line": (D[0] - rect_width, D[1], "left", 0),
+            "gpu_load_arc":  (D[0], D[1] + arc_radius - line_width//2, "center", 0),
+            "gpu_temp_text": (D[0], D[1] + arc_radius, "right", 0),
+        }
+
+        self._brightness = 50
+        self.colors = {
+            "debug": "#9A4CB8",
+            "bg": (0, 0, 0, 255)  # black
+        }
 
         if self._bg_image:
             scale = 1.22
@@ -209,12 +208,12 @@ class Kraken():
             self._bg.paste(bg_resized, (RADIUS - new_w // 2, RADIUS - new_h // 2 + offset_y))
 
         if self.debug:
-            draw = ImageDraw.Draw(self._frame)
+            draw = ImageDraw.Draw(self._bg)
             draw.circle((WIDTH//2, HEIGHT//2), radius=RADIUS, outline=self.colors["debug"], width=10)
 
         for name, widget in self.widgets.items():
             widget.update()
-            x, y, align = self.widget_configs[name]
+            x, y, align, rot = self.widget_configs[name]
 
             # Adjust pasting position based on alignment
             w_w, w_h = widget.bg.size
@@ -230,19 +229,31 @@ class Kraken():
                 self._fg.paste(widget.fg, widget.pos, widget.fg)
 
 
+    def update_frame(self):
+        self._fg = Image.new('RGBA', self._resolution, color=(0, 0, 0, 0))
+        for name, widget in self.widgets.items():
+            update_widget = widget.update()
+            # if update_widget and widget.fg:
+            draw = ImageDraw.Draw(self._fg)
+            # draw.rectangle((*widget.pos, widget.pos[0]+widget.width, widget.pos[1]+widget.height), fill="#00000000", outline="red")
+            self._fg.paste(widget.fg, widget.pos, widget.fg)
+
+        self.frame = Image.alpha_composite(self._bg, self._fg)
+        if not self.debug:
+            self.frame = self.frame.rotate(self._angle, resample=Image.BICUBIC)
+
 
     def display(self):
-        for name, widget in self.widgets.items():
-            if widget.update():
-                self._fg.paste(widget.fg, widget.pos, widget.fg)
-        self._frame = Image.blend(self._bg, self._fg, 0.5)
+        self.update_frame()
+
+        with io.BytesIO() as buffer:
+            self.frame.convert("RGB").save(buffer, format='BMP')
+            # gif_frame = self._frame.convert("P", palette=Image.ADAPTIVE, colors=256)
+            # gif_frame.save(buffer, format='GIF', save_all=True, append_images=[gif_frame], duration=500,loop=0)
+            buffer.seek(0)
+
+        # while True:
         if not self.debug:
-            with io.BytesIO() as buffer:
-                self._frame = self._frame.rotate(self._angle, resample=Image.BICUBIC)
-                self._frame.convert("RGB").save(buffer, format='BMP')
-                # gif_frame = self._frame.convert("P", palette=Image.ADAPTIVE, colors=256)
-                # gif_frame.save(buffer, format='GIF', save_all=True, append_images=[gif_frame], duration=500,loop=0)
-                buffer.seek(0)
                 try:
                     self.device.set_screen('lcd', 'static', buffer)
                 except Exception as e:
@@ -253,8 +264,8 @@ class Kraken():
                         print(e)
         else:
             plt.ion()
-            self._ax.clear()
-            self._ax.imshow(self._frame)
+            # self._ax.clear()
+            self._ax.imshow(self.frame)
             plt.draw()
 
         # Proper ticker actualization logic
@@ -282,6 +293,8 @@ if __name__ == "__main__":
     args = arg_parser()
     debug = args.debug
     kraken = Kraken(debug=debug)
+    kraken.init_frame()
+    # threading.Thread(target=kraken.display, daemon=True).start()
+
     while True:
-        kraken.init_frame()
         kraken.display()

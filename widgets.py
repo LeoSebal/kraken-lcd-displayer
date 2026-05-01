@@ -11,12 +11,14 @@ class Widget():
         self.data = data_updater() if callable(data_updater) else 0
         self._center = (0,0)
         self.colors = {
+            "transparent": (0, 0, 0, 0),
             "bg": (97, 103, 131, 255),
             "front": (0, 255, 255, 255),
             "text": None,
             "debug": "#9A4CB8"
         }
         self.pos = (0,0)
+        self.rot = (0,0)
 
     @property
     def bg(self):
@@ -55,23 +57,32 @@ class Widget():
     def __repr__(self):
         return f"{self.__class__}, {self.__dict__}"
 
+    @property
+    def height(self):
+        return self.bg.height
+
+    @property
+    def width(self):
+        return self.bg.width
+
 
 
 
 class LineGraphic(Widget):
-    def __init__(self, length, width, colors=None, data_updater=None):
+    def __init__(self, length, line_width, colors=None, data_updater=None, pos=(0,0), rot=0):
         super().__init__(data_updater)
         self.length = length
-        self.width = width
-        # self._center = (self.length//2, self.width//2)
+        self.line_width = line_width
+        # self._center = (self.length//2, self.line_width//2)
+        self.pos = pos
+        self.rot = rot
         if colors:
             self.colors.update(colors)
 
         # Pre-initialize layers to avoid repeated allocations
-        self._bg = Image.new('RGBA', (self.length, self.width), color=(0, 0, 0, 0))
-        draw = ImageDraw.Draw(self._bg)
-        draw.rectangle((0, 0, self.length, self.width), fill=self.colors["bg"])
-        self._fg = Image.new('RGBA', (self.length, self.width), color=(0, 0, 0, 0))
+        self._bg = Image.new('RGBA', (length, self.line_width), color=self.colors["bg"])
+        if self.rot:
+            self._bg = self._bg.rotate(self.rot, expand=True)
 
     @property
     def bg(self):
@@ -79,33 +90,37 @@ class LineGraphic(Widget):
 
     @property
     def fg(self):
-        draw = ImageDraw.Draw(self._fg)
-        # Clear current foreground layer without re-allocating memory
-        draw.rectangle((0, 0, self.length, self.width), fill=(0, 0, 0, 0))
+        # Recreate image to ensure a clean transparent canvas
+        fg = Image.new('RGBA', (self.length, self.line_width), color=self.colors["transparent"])
+        draw = ImageDraw.Draw(fg)
         fill = int((self.data / 100) * self.length)
-        # Draw horizontal bar
-        draw.rectangle((0, 0, fill, self.width), fill=self.colors["front"])
-        return self._fg
+        draw.rectangle((0, 0, fill, self.line_width), fill=self.colors["front"])
+        if self.rot:
+            return fg.rotate(self.rot, expand=True)
+        return fg
 
 
 
 class ArcGraphic(Widget):
-    def __init__(self, angle, radius, line_width, start_angle=90, colors={}, data_updater=None):
+    def __init__(self, angle, radius, line_width, start_angle=90, colors={}, data_updater=None, pos=(0,0), rot=0):
         super().__init__(data_updater)
         self.start_angle = start_angle
         self.angle = angle
         self.radius = radius
         self.line_width = line_width
+        self.pos = pos
+        self.rot = rot
         if colors:
             for k,v in colors.items():
                 self.colors[k] = v
 
-        size = 2 * self.radius + self.line_width
-        self._bg = Image.new('RGBA', (size, size), color=(0, 0, 0, 0))
+        self.size = 2 * self.radius + self.line_width
+        self._bg = Image.new('RGBA', (self.size, self.size), color=self.colors["transparent"])
         draw = ImageDraw.Draw(self._bg)
-        bbox = (self.line_width//2, self.line_width//2, size - self.line_width//2, size - self.line_width//2)
+        bbox = (self.line_width//2, self.line_width//2, self.size - self.line_width//2, self.size - self.line_width//2)
         draw.arc(bbox, start=self.start_angle, end=self.start_angle + self.angle, fill=self.colors["bg"], width=self.line_width)
-        self._fg = Image.new('RGBA', (size, size), color=(0, 0, 0, 0))
+        if self.rot:
+            self._bg = self._bg.rotate(self.rot, expand=True)
 
 
     @property
@@ -114,18 +129,19 @@ class ArcGraphic(Widget):
 
     @property
     def fg(self):
-        draw = ImageDraw.Draw(self._fg)
-        size = self._fg.width
-        draw.rectangle((0, 0, size, size), fill=(0, 0, 0, 0))
-        bbox = (self.line_width//2, self.line_width//2, size - self.line_width//2, size - self.line_width//2)
+        fg = Image.new('RGBA', (self.size, self.size), color=self.colors["transparent"])
+        draw = ImageDraw.Draw(fg)
+        bbox = (self.line_width//2, self.line_width//2, self.size - self.line_width//2, self.size - self.line_width//2)
         end_angle = (self.data / 100) * self.angle + self.start_angle
         draw.arc(bbox, start=self.start_angle, end=end_angle, fill=self.colors["front"], width=self.line_width)
-        return self._fg
+        if self.rot:
+            return fg.rotate(self.rot, expand=True)
+        return fg
 
 
 
 class Text(Widget):
-    def __init__(self, text_source, font_path, font_size, color=(255, 255, 255, 255), align="lm"):
+    def __init__(self, text_source, font_path, font_size, color=(255, 255, 255, 255), align="left", pos=(0,0), rot=0):
         if callable(text_source):
             super().__init__(text_source)
             self.static = False
@@ -135,21 +151,21 @@ class Text(Widget):
             self.static = True
 
         self.font = ImageFont.truetype(font_path, font_size)
-        self.align = align
+        self.align = "ls" if align == "left" else "rs"
         self.colors["text"] = color
         self.w = 0
         self.h = 0
+        self.pos = pos
+        self.rot = rot
 
         if self._bg is None:
-            bbox = self.font.getbbox(str(self.data))
-            self.w, self.h = bbox[2] - bbox[0], bbox[3] - bbox[1]
-            self._bg = Image.new('RGBA', (self.w + 4, self.h + 4), color=(0,0,0,0))
+            self._update_w_h()
+            self._bg = Image.new('RGBA', (self.w + 4, self.h + 4), color=self.colors["transparent"])
             if self.static:
                 draw = ImageDraw.Draw(self._bg)
                 draw.text((2, 2), str(self.data), font=self.font, fill=self.colors["text"])
-            else:
-                self._fg = Image.new('RGBA', self._bg.size, color=(0,0,0,0))
-
+                if self.rot:
+                    self._bg.rotate(self.rot, expand=True)
 
     @property
     def bg(self):
@@ -158,7 +174,15 @@ class Text(Widget):
     @property
     def fg(self):
         if not self.static:
+            self._update_w_h()
+            self._fg = Image.new('RGBA', self._bg.size, color=self.colors["transparent"])
             draw = ImageDraw.Draw(self._fg)
-            draw.rectangle((0, 0, self.w + 4, self.h + 4), fill=(0, 0, 0, 0))
-            draw.text((2, 2), str(self.data), font=self.font, fill=self.colors["text"])
+            draw.rectangle((0, 0, self.w + 4, self.h + 4), fill=self.colors["transparent"])
+            draw.text((2, 2), str(self.data), font=self.font, fill=self.colors["text"], align=self.align)
+            if self.rot:
+                return self._fg.rotate(self.rot, expand=True)
         return self._fg
+
+    def _update_w_h(self):
+        bbox = self.font.getbbox(self.data, mode="ltr" if self.align == "left" else "rtl")
+        self.w, self.h = 3*(bbox[2] - bbox[0])//2, 2*(bbox[3] - bbox[1])
