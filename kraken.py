@@ -1,5 +1,6 @@
 import io
 from pathlib import Path
+from typing import Callable
 import time
 import math
 import warnings
@@ -10,6 +11,7 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 from liquidctl import find_liquidctl_devices
 import pynvml
 import matplotlib.pyplot as plt
+import widgets
 
 
 
@@ -48,16 +50,6 @@ if 0:
         )
 
 
-def rotated_rectangle(frame, x, y, rotation, width, height):
-    drawing = ImageDraw.Draw()
-    x1, y1 = to_px(x, y)
-    x2 = x1 + width
-    y2 = y1 + height
-    center = ((x1+x2)/2, (y1+y2)/2)
-    drawing.rectangle((x1, y1, x2, y2))
-    drawing.rotate()
-
-
 class Kraken():
     def __init__(self, debug = False):
         self.debug = debug
@@ -78,15 +70,6 @@ class Kraken():
             self._fig, self._ax = plt.subplots()
             # self.ax.remove()
 
-        self.colors = {
-            "bg": (0,0,0),  # black
-            "liquid": (97, 103, 131, 255),  # dark grey
-            "widget_bg": (97, 103, 131, 255),  # light grey
-            "widget_front": (0, 255, 255, 255),  # ice blue
-            "numbers": (255, 255,255, 255), # white,
-            "debug": "#9A4CB8",
-        }
-
         pynvml.nvmlInit()
         self._nv_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
 
@@ -95,21 +78,53 @@ class Kraken():
         self._liq_temp = 0
         self._cpu_load = 0
         self._gpu_load = 0
-        self._update_cpu_temp = False
-        self._update_gpu_temp = False
-        self._update_liq_temp = False
-        self._update_cpu_load = False
-        self._update_gpu_load = False
 
         self._resolution = (WIDTH, HEIGHT)
         self._frame = None
 
+        # Initialize widgets
+        rect_width = int(1.09375 * RADIUS)  # 350 px
+        line_width = int(0.0625 * RADIUS)   # 20 px
+        arc_radius = int(0.28125 * RADIUS)  # 90 px
+        font_path = str(Path(__file__).parent / "fonts/Audiowide-Regular.ttf")
+
+        A = to_px(-0.5, 0.1)
+        D = to_px(0.5, -0.1)
+
+        self.widgets = {
+            "cpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.cpu_temp),
+            "cpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, start_angle=90, data_updater=lambda: self.cpu_load),
+            "cpu_temp_text": widgets.Text(lambda: f"{int(self.cpu_temp)}°C", font_path, 120),
+            "gpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.gpu_temp),
+            "gpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, start_angle=270, data_updater=lambda: self.gpu_load),
+            "gpu_temp_text": widgets.Text(lambda: f"{int(self.gpu_temp)}°C", font_path, 120),
+        }
+
+        # Define placement: (x, y) coordinates and which edge to align (offset from center)
+        self.widget_configs = {
+            "cpu_temp_line": (A[0], A[1], "left"),
+            "cpu_load_arc": (A[0], A[1] - arc_radius, "center"),
+            "cpu_temp_text": (A[0], A[1] - arc_radius, "left"),
+            "gpu_temp_line": (D[0] - rect_width, D[1], "left"),
+            "gpu_load_arc": (D[0], D[1] + arc_radius, "center"),
+            "gpu_temp_text": (D[0], D[1] + arc_radius, "right"),
+        }
+
         self._brightness = 50
+        self.colors = {
+            "debug": "#9A4CB8",
+            "bg": (0, 0, 0, 255)
+        }
 
         self._bg_image = None
         self._angle = 30
         self._fps = 1
+        self._last_stats_update = 0
         self._last_tick = time.time()
+
+        self._bg = Image.new('RGBA', self._resolution, color=(0, 0, 0))  # black background
+        self._fg = Image.new('RGBA', self._resolution, color=(0, 0, 0, 0))  # transparent widget layer
+        self.init_frame()
 
 
     @property
@@ -117,12 +132,13 @@ class Kraken():
         return self._brightness
 
     @brightness.setter
-    def set_brightness(self, brightness:int):
-        if 0 <= brightness <= 100:
-            self._brightness = brightness
-            self.device.set_brightness(brightness)
+    def brightness(self, value: int):
+        if 0 <= value <= 100:
+            self._brightness = value
+            if not self.debug:
+                self.device.set_brightness(value)
         else:
-            raise ValueError(f"Brightness must be between 0 and 100, not {brightness}")
+            raise ValueError(f"Brightness must be between 0 and 100, not {value}")
 
 
     @property
@@ -130,11 +146,11 @@ class Kraken():
         return self._bg_image
 
     @bg_image.setter
-    def set_bg_image(self, bg_image):
-        if bg_image and Path(bg_image).exists():
-            self._bg_image = Image.open(bg_image)
+    def bg_image(self, value):
+        if value and Path(value).exists():
+            self._bg_image = Image.open(value)
         else:
-            raise FileNotFoundError(bg_image)
+            raise FileNotFoundError(value)
 
 
     @property
@@ -142,10 +158,10 @@ class Kraken():
         return self._fps
 
     @fps.setter
-    def set_fps(self, fps):
-        if 1 <= fps <= 30:
-            self._fps = fps
-            if fps > 20:
+    def fps(self, value):
+        if 1 <= value <= 30:
+            self._fps = value
+            if value > 20:
                 warnings.warn("FPS > 20 might not be stable")
         else:
             raise ValueError("FPS must be between 1 and 30")
@@ -156,143 +172,76 @@ class Kraken():
         return self._angle
 
     @angle.setter
-    def set_angle(self, angle):
-        self._angle = angle
+    def angle(self, value):
+        self._angle = value
 
-
-    def update_cpu_temp(self):
+    @property
+    def cpu_temp(self):
         temps = psutil.sensors_temperatures()
         if 'k10temp' in temps:
-            self._cpu_temp = temps['k10temp'][0].current
+            return temps['k10temp'][0].current
         elif 'coretemp' in temps:
-            self._cpu_temp = temps['coretemp'][0].current
+            return temps['coretemp'][0].current
+
+    @property
+    def cpu_load(self):
+        return psutil.cpu_percent()
+
+    @property
+    def gpu_temp(self):
+        return pynvml.nvmlDeviceGetTemperature(self._nv_handle, pynvml.NVML_TEMPERATURE_GPU)
+
+    @property
+    def gpu_load(self):
+        return pynvml.nvmlDeviceGetUtilizationRates(self._nv_handle).gpu
 
 
-    def update_cpu_load(self):
-        self._cpu_load = psutil.cpu_percent()
+    def init_frame(self):
+        # self.update_all_stats()
+        self._frame = Image.new('RGBA', (WIDTH, HEIGHT), color="#000000")
 
-
-    def update_gpu_temp(self):
-        self._gpu_temp = pynvml.nvmlDeviceGetTemperature(self._nv_handle, pynvml.NVML_TEMPERATURE_GPU)
-
-
-    def update_gpu_load(self):
-        self._gpu_load = pynvml.nvmlDeviceGetUtilizationRates(self._nv_handle).gpu
-
-
-    def update_all_stats(self, force=False):
-        now = time.time()
-        # Only poll hardware sensors once per second
-        if force or (now - self._last_stats_update >= 1.0):
-            self.update_cpu_temp()
-            self.update_cpu_load()
-            self.update_gpu_temp()
-            self.update_gpu_load()
-            self._last_stats_update = now
-
-
-    def _draw_cpu_widget(self, canvas_draw, rect_width, line_width, R, font_size, small_font_size,
-        arc_length):
-
-        cpu_widget = canvas_draw
-        # 2. CPU anchors
-        A = to_px(-0.5, 1/10)  # left anchor
-        B = (A[0] + rect_width, A[1])  # right anchor
-        # 3. CPU load arc gauge
-        cpu_arc_box = [A[0] - R - line_width//2, A[1] - 2*R - line_width//2,
-                       A[0] + R + line_width//2, A[1] + line_width//2]
-        cpu_widget.arc(cpu_arc_box, start=90, end=90+arc_length, fill=self.colors["widget_bg"], width=line_width)
-        cpu_widget.arc(cpu_arc_box, start=90, end=90 + (self._cpu_load / 100 * arc_length), fill=self.colors["widget_front"], width=line_width)
-        # 4. CPU temp line gauge
-        cpu_widget.line((*A, *B), fill=self.colors["widget_bg"], width = line_width)
-        cpu_widget.line((*A, A[0] + (self._cpu_temp / 100 * rect_width), B[1]), fill=self.colors["widget_front"], width = line_width)
-        # 5. CPU temp display
-        cpu_widget.text((A[0], A[1] - R),
-                    f"{int(self._cpu_temp)}°C",
-                    font=get_font(font_size), fill=self.colors["numbers"], anchor="lm")
-        # 6. CPU text
-        cpu_txt = Image.new('RGBA', (R, R), color=(0, 0, 0, 0))
-        d = ImageDraw.Draw(cpu_txt)
-        d.text((0, 0), "CPU",
-                font=get_font(small_font_size), fill=self.colors["numbers"], anchor="lt")
-        cpu_txt = cpu_txt.rotate(90, expand=1)
-        # Using the internal frame reference instead of a layer
-        self._frame.paste(cpu_txt, (A[0] - R//2, A[1] - int(R*1.6)), cpu_txt)
-
-
-    def _draw_gpu_widget(self, canvas_draw, rect_width, line_width, R, font_size, small_font_size,
-        arc_length):
-
-        gpu_widget = canvas_draw
-        # 2. GPU anchors
-        D = to_px(0.5, -1/10)  # right anchor
-        C = (D[0] - rect_width, D[1])  # left anchor
-        # 3. GPU load arc gauge
-        gpu_arc_box = [D[0] - R - line_width//2, D[1] - line_width//2,
-                       D[0] + R + line_width//2, D[1] + 2*R + line_width//2]
-        gpu_widget.arc(gpu_arc_box, start=270, end=270+arc_length, fill=self.colors["widget_bg"], width=line_width)
-        gpu_widget.arc(gpu_arc_box, start=270, end=270 + (self._gpu_load / 100 * arc_length), fill=self.colors["widget_front"], width=line_width)
-        # 4. GPU temp line gauge
-        gpu_widget.line((*C, *D), fill=self.colors["widget_bg"], width = line_width)
-        gpu_widget.line((D[0] - self._gpu_temp / 100 * rect_width, D[1], *D), fill=self.colors["widget_front"], width = line_width)
-        # 5. GPU temp display
-        gpu_widget.text((D[0], D[1] + R),
-                    f"{int(self._gpu_temp)}°C", 
-                    font=get_font(font_size), fill=self.colors["numbers"], anchor="rm")
-        # 6. GPU text
-        gpu_txt = Image.new('RGBA', (R, R), color=(0, 0, 0, 0))
-        d = ImageDraw.Draw(gpu_txt)
-        d.text((0, 0), "GPU",
-                font=get_font(small_font_size), fill=self.colors["numbers"], anchor="lt")
-        gpu_txt = gpu_txt.rotate(-90, expand=1)
-        self._frame.paste(gpu_txt, (D[0] - R//2, D[1] + int(R*0.6)), gpu_txt)
-
-
-
-    def draw_frame(self):
-        self.update_all_stats()
-        radius = self._resolution[0]/2
-
-        # 1. Base Layer (Main Canvas)
-        self._frame = Image.new('RGBA', self._resolution, color=self.colors["bg"])
-        main_draw = ImageDraw.Draw(self._frame)
-
-        # For debugging purposes, draw a visual circle with a purple ring
-        if self.debug:
-            main_draw.rectangle((0,0,WIDTH,HEIGHT), fill=self.colors["debug"])
-            main_draw.circle((WIDTH//2,HEIGHT//2),RADIUS, fill=self.colors["bg"])
-            main_draw.line((WIDTH//2,0,WIDTH//2,HEIGHT), width=1, fill=self.colors["debug"])
-            main_draw.line((0,HEIGHT//2,WIDTH,HEIGHT//2), width=1, fill=self.colors["debug"])
-
-        # 1. Background Media
         if self._bg_image:
-            # Scale 1.22 and Offset Y -0.352 from JSON
             scale = 1.22
             bg_w, bg_h = self._bg_image.size
             new_w, new_h = int(bg_w * scale), int(bg_h * scale)
             bg_resized = self._bg_image.resize((new_w, new_h))
-            offset_y = int(-0.352 * radius)
-            self._frame.paste(bg_resized, (radius - new_w // 2, radius - new_h // 2 + offset_y))
+            offset_y = int(-0.352 * RADIUS)
+            self._bg.paste(bg_resized, (RADIUS - new_w // 2, RADIUS - new_h // 2 + offset_y))
 
-        # 3. Arcs (CPU and GPU Load)
-        rect_width = int(1.09375 * RADIUS)  #  350 px
-        line_width = int(0.0625 * RADIUS)  # 20 px
-        R = int(0.28125 * RADIUS)  # 90 px
-        font_size = 120  # pt
-        small_font_size = 30  # pt
-        arc_length = 170  # degrees
+        if self.debug:
+            draw = ImageDraw.Draw(self._frame)
+            draw.circle((WIDTH//2, HEIGHT//2), radius=RADIUS, outline=self.colors["debug"], width=10)
 
-        # 4. Draw directly onto the main frame
-        self._draw_cpu_widget(main_draw, rect_width, line_width, R, font_size, small_font_size, arc_length)
-        self._draw_gpu_widget(main_draw, rect_width, line_width, R, font_size, small_font_size, arc_length)
+        for name, widget in self.widgets.items():
+            widget.update()
+            x, y, align = self.widget_configs[name]
+
+            # Adjust pasting position based on alignment
+            w_w, w_h = widget.bg.size
+            if align == "left":
+                widget.pos = (x, y - w_h // 2)
+            elif align == "right":
+                widget.pos = (x - w_w, y - w_h // 2)
+            else:  # center
+                widget.pos = (x - w_w // 2, y - w_h // 2)
+
+            self._bg.paste(widget.bg, widget.pos, widget.bg)
+            if widget.fg:
+                self._fg.paste(widget.fg, widget.pos, widget.fg)
 
 
 
     def display(self):
+        for name, widget in self.widgets.items():
+            if widget.update():
+                self._fg.paste(widget.fg, widget.pos, widget.fg)
+        self._frame = Image.blend(self._bg, self._fg, 0.5)
         if not self.debug:
             with io.BytesIO() as buffer:
-                frame = self._frame.rotate(self._angle, resample=Image.BICUBIC)
-                frame.save(buffer, format='BMP')
+                self._frame = self._frame.rotate(self._angle, resample=Image.BICUBIC)
+                self._frame.convert("RGB").save(buffer, format='BMP')
+                # gif_frame = self._frame.convert("P", palette=Image.ADAPTIVE, colors=256)
+                # gif_frame.save(buffer, format='GIF', save_all=True, append_images=[gif_frame], duration=500,loop=0)
                 buffer.seek(0)
                 try:
                     self.device.set_screen('lcd', 'static', buffer)
@@ -304,6 +253,7 @@ class Kraken():
                         print(e)
         else:
             plt.ion()
+            self._ax.clear()
             self._ax.imshow(self._frame)
             plt.draw()
 
@@ -312,13 +262,11 @@ class Kraken():
         delay = (1.0 / self._fps) - elapsed
         if self.debug:
             plt.pause(max(0.001, delay))
+        i = int(self._fps * elapsed)
+        print(f"skipped {i} frames ({delay:.2f}s, {elapsed:.2f}s)")
         i = 0
-        while delay < 0:
-            delay += 1.0 / self._fps
-            i += 1
-        print(f"skipped {i} frames")
-        i = 0
-        time.sleep(delay)
+        if delay > 0:
+            time.sleep(delay)
         self._last_tick = time.time()
 
 
@@ -335,5 +283,5 @@ if __name__ == "__main__":
     debug = args.debug
     kraken = Kraken(debug=debug)
     while True:
-        kraken.draw_frame()
+        kraken.init_frame()
         kraken.display()
