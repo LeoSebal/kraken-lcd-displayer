@@ -141,7 +141,7 @@ class ArcGraphic(Widget):
 
 
 class Text(Widget):
-    def __init__(self, text_source, font_path, font_size, color=(255, 255, 255, 255), align="left", pos=(0,0), rot=0):
+    def __init__(self, text_source, font_path, font_size, color=(255, 255, 255, 255), align="lb", pos=(0,0), rot=0):
         if callable(text_source):
             super().__init__(text_source)
             self.static = False

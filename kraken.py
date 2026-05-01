@@ -84,7 +84,7 @@ class Kraken():
 
         self._bg_image = None
         self._angle = 30
-        self._fps = 1
+        self._fps = 15
         self._last_stats_update = 0
         self._last_tick = time.time()
 
@@ -92,6 +92,7 @@ class Kraken():
         self._bg = Image.new('RGBA', self._resolution, color=(0, 0, 0, 255))  # black background
         self._fg = Image.new('RGBA', self._resolution, color=(0, 0, 0, 0))  # transparent widget layer
         self.init_frame()
+        self.current_frame_data = None
 
 
     @property
@@ -180,7 +181,7 @@ class Kraken():
             "cpu_temp_text": widgets.Text(lambda: f"{int(self.cpu_temp)}°C", font_path, 120),
             "gpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.gpu_temp, rot=180),
             "gpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, data_updater=lambda: self.gpu_load, rot=180),
-            "gpu_temp_text": widgets.Text(lambda: f"{int(self.gpu_temp)}°C", font_path, 120, align="right"),
+            "gpu_temp_text": widgets.Text(lambda: f"{int(self.gpu_temp)}°C", font_path, 120, align="rt"),
         }
 
         # Define placement: (x, y) coordinates and which edge to align (offset from center)
@@ -241,44 +242,35 @@ class Kraken():
         self.frame = Image.alpha_composite(self._bg, self._fg)
         if not self.debug:
             self.frame = self.frame.rotate(self._angle, resample=Image.BICUBIC)
+            with io.BytesIO() as buffer:
+                self.frame.convert("P", palette=Image.ADAPTIVE).save(buffer, format='GIF', append_images=[self.frame]*5, duration=500, loop=0)
+                self.current_frame_data = buffer.getvalue()
 
 
     def display(self):
-        self.update_frame()
+        while True:
+            # Take a local reference to the frame data
+            data_to_send = self.current_frame_data
 
-        with io.BytesIO() as buffer:
-            self.frame.convert("RGB").save(buffer, format='BMP')
-            # gif_frame = self._frame.convert("P", palette=Image.ADAPTIVE, colors=256)
-            # gif_frame.save(buffer, format='GIF', save_all=True, append_images=[gif_frame], duration=500,loop=0)
-            buffer.seek(0)
-
-        # while True:
-        if not self.debug:
+            if data_to_send and not self.debug:
                 try:
-                    self.device.set_screen('lcd', 'static', buffer)
+                    # Wrap the bytes in BytesIO so liquidctl treats it as a stream, not a path
+                    with io.BytesIO(data_to_send) as stream:
+                        # Note: 'animation' is the standard liquidctl mode for GIF/AVI on Kraken Elite
+                        self.device.set_screen('lcd', 'gif', stream)
                 except Exception as e:
-                    # If the pump is busy or the USB bus is choked, let the USB bus clear
+                    # Handle USB congestion (liquidctl bucket errors)
                     if "bucket" in str(e).lower():
                         time.sleep(0.1)
                     else:
-                        print(e)
-        else:
-            plt.ion()
-            # self._ax.clear()
-            self._ax.imshow(self.frame)
-            plt.draw()
+                        print(f"USB Communication Error: {e}")
 
-        # Proper ticker actualization logic
-        elapsed = time.time() - self._last_tick
-        delay = (1.0 / self._fps) - elapsed
-        if self.debug:
-            plt.pause(max(0.001, delay))
-        i = int(self._fps * elapsed)
-        print(f"skipped {i} frames ({delay:.2f}s, {elapsed:.2f}s)")
-        i = 0
-        if delay > 0:
-            time.sleep(delay)
-        self._last_tick = time.time()
+            # Throttle the display thread to match the target FPS
+            elapsed = time.time() - self._last_tick
+            delay = (1.0 / self._fps) - elapsed
+            if delay > 0:
+                time.sleep(delay)
+            self._last_tick = time.time()
 
 
 
@@ -294,7 +286,16 @@ if __name__ == "__main__":
     debug = args.debug
     kraken = Kraken(debug=debug)
     kraken.init_frame()
-    # threading.Thread(target=kraken.display, daemon=True).start()
+
+    # Start the USB communication in a background thread.
+    # It will continuously push whatever is in `kraken.frame`.
+    if not debug:
+        threading.Thread(target=kraken.display, daemon=True).start()
 
     while True:
-        kraken.display()
+        # The main thread handles data fetching and rendering the UI layers.
+        kraken.update_frame()
+        if debug:            # Matplotlib must be updated on the main thread.
+            kraken._ax.clear()
+            kraken._ax.imshow(kraken.frame)
+            plt.pause(1/kraken.fps) # Small pause to allow GUI events to process
