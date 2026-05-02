@@ -11,9 +11,9 @@ class Widget():
         self.data = data_updater() if callable(data_updater) else 0
         self._center = (0,0)
         self.colors = {
-            "transparent": (0, 0, 0, 0),
-            "bg": (97, 103, 131, 255),
-            "front": (0, 255, 255, 255),
+            "transparent": "#FFFFFF00",
+            "bg": "#616783",
+            "front": "#00FFFF",
             "text": None,
             "debug": "#9A4CB8"
         }

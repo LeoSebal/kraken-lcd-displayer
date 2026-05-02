@@ -1,26 +1,24 @@
 import io
 from pathlib import Path
-from typing import Callable
 import time
-import math
 import warnings
-import psutil
 import argparse
-import yaml
 import threading
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont
 from liquidctl import find_liquidctl_devices
-import pynvml
 import matplotlib.pyplot as plt
+
 import widgets
+from stats import get_cpu_temp, get_cpu_load, get_gpu_temp, get_gpu_load
 
 
 
-HEIGHT = 640
-WIDTH = 640
-RADIUS = 320
+HEIGHT = 640  # height of the frame to be displayed
+WIDTH = 640  # width of the frame to be displayed
+RADIUS = 320  # actual radius of the Kraken Elite LCD
 
-RAM_PATH = "/dev/shm/frame.png"
+global kraken
+
 
 
 _FONT_CACHE = {}
@@ -32,23 +30,12 @@ def get_font(size=30):
     return _FONT_CACHE[size]
 
 def to_px(x,y):
-    """Converts (-1,1:1,1) axis coordinates to pixel coordinates."""
+    """Utility function that converts (-1,1:1,1) axis coordinates to pixel coordinates."""
     return (
         int(RADIUS + x*RADIUS), 
         int(RADIUS - y*RADIUS)
     )
 
-
-if 0:
-    def rotated_rectangle(ax, ay, bx, by, angle_deg):
-        angle_rad = 90 * angle_deg / math.pi
-        #rotates point `A` about point `B` by `angle` radians clockwise.
-        center = ((ax+bx)/2, (ay+by)/2)
-        angle += math.atan2(ay-by, ax-bx)
-        return (
-            round(bx + radius * math.cos(angle)),
-            round(by + radius * math.sin(angle))
-        )
 
 
 class Kraken():
@@ -71,9 +58,6 @@ class Kraken():
             self._fig, self._ax = plt.subplots()
             # self.ax.remove()
 
-        pynvml.nvmlInit()
-        self._nv_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
-
         self._cpu_temp = 0
         self._gpu_temp = 0
         self._liq_temp = 0
@@ -82,10 +66,18 @@ class Kraken():
 
         self._resolution = (WIDTH, HEIGHT)
 
+        # Background image (only static allowed for now)
         self._bg_image = None
+        # Display angle
         self._angle = 30
+        # FPS to be displayed on-screen
         self._fps = 15
+        # Rate at which data is polled 
+        self._poll_rate = 0.5
         self._last_stats_update = 0
+        # Rate at which we display onto the Kraken.
+        # Will have to be calculated depending on GIF duration (when that is supported) and poll rate
+        self._push_rate = 1
         self._last_tick = time.time()
 
         self.frame = Image.new('RGBA', self._resolution, color=(0, 0, 0, 255))
@@ -145,24 +137,18 @@ class Kraken():
 
     @property
     def cpu_temp(self):
-        temps = psutil.sensors_temperatures()
-        if 'k10temp' in temps:
-            return temps['k10temp'][0].current
-        elif 'coretemp' in temps:
-            return temps['coretemp'][0].current
+        return get_cpu_temp()
 
     @property
     def cpu_load(self):
-        return psutil.cpu_percent()
-
+        return get_cpu_load()
     @property
     def gpu_temp(self):
-        return pynvml.nvmlDeviceGetTemperature(self._nv_handle, pynvml.NVML_TEMPERATURE_GPU)
+        return get_gpu_temp()
 
     @property
     def gpu_load(self):
-        return pynvml.nvmlDeviceGetUtilizationRates(self._nv_handle).gpu
-
+        return get_gpu_load()
 
     def init_frame(self):
 
@@ -184,20 +170,20 @@ class Kraken():
             "gpu_temp_text": widgets.Text(lambda: f"{int(self.gpu_temp)}°C", font_path, 120, align="rt"),
         }
 
-        # Define placement: (x, y) coordinates and which edge to align (offset from center)
+        # Define placement: (x, y) coordinates, which edge to align (offset from center) and rotation angle
         self.widget_configs = {
-            "cpu_temp_line": (A[0], A[1], "left", 0),
-            "cpu_load_arc":  (A[0], A[1] - arc_radius + line_width//2, "center", 0),
-            "cpu_temp_text": (A[0], A[1] - arc_radius, "left", 0),
-            "gpu_temp_line": (D[0] - rect_width, D[1], "left", 0),
-            "gpu_load_arc":  (D[0], D[1] + arc_radius - line_width//2, "center", 0),
-            "gpu_temp_text": (D[0], D[1] + arc_radius, "right", 0),
+            "cpu_temp_line": (A[0], A[1]+1,                             "left",     0),
+            "cpu_load_arc":  (A[0], A[1] - arc_radius + line_width//2,  "center",   0),
+            "cpu_temp_text": (A[0], A[1] - arc_radius,                  "left",     0),
+            "gpu_temp_line": (D[0] - rect_width, D[1]-1,                "left",     0),
+            "gpu_load_arc":  (D[0], D[1] + arc_radius - line_width//2,  "center",   0),
+            "gpu_temp_text": (D[0], D[1] + arc_radius,                  "right",    0),
         }
 
         self._brightness = 50
         self.colors = {
             "debug": "#9A4CB8",
-            "bg": (0, 0, 0, 255)  # black
+            "bg": "#000000"  # black
         }
 
         if self._bg_image:
@@ -288,14 +274,15 @@ if __name__ == "__main__":
     kraken.init_frame()
 
     # Start the USB communication in a background thread.
-    # It will continuously push whatever is in `kraken.frame`.
+    # It will continuously push whatever is in `kraken.current_frame_data`.
     if not debug:
         threading.Thread(target=kraken.display, daemon=True).start()
 
     while True:
         # The main thread handles data fetching and rendering the UI layers.
         kraken.update_frame()
-        if debug:            # Matplotlib must be updated on the main thread.
+        # The debugging mode is a direct display mode, that displays the UI in a Matplotlib plot
+        if debug:
             kraken._ax.clear()
             kraken._ax.imshow(kraken.frame)
-            plt.pause(1/kraken.fps) # Small pause to allow GUI events to process
+            plt.pause(1/kraken._fps) # Small pause to allow GUI events to process
