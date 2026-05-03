@@ -1,5 +1,6 @@
 from typing import Callable
-from PIL import Image, ImageDraw, ImageFont, ImageOps
+from PIL import Image, ImageDraw, ImageFont
+
 
 
 class Widget():
@@ -67,7 +68,6 @@ class Widget():
 
 
 
-
 class LineGraphic(Widget):
     def __init__(self, length, line_width, colors=None, data_updater=None, pos=(0,0), rot=0):
         super().__init__(data_updater)
@@ -122,7 +122,6 @@ class ArcGraphic(Widget):
         if self.rot:
             self._bg = self._bg.rotate(self.rot, expand=True)
 
-
     @property
     def bg(self):
         return self._bg
@@ -141,7 +140,7 @@ class ArcGraphic(Widget):
 
 
 class Text(Widget):
-    def __init__(self, text_source, font_path, font_size, color=(255, 255, 255, 255), align="lb", pos=(0,0), rot=0):
+    def __init__(self, text_source, font_path, font_size, color=(255, 255, 255, 255), align="lt", pos=(0,0), rot=0):
         if callable(text_source):
             super().__init__(text_source)
             self.static = False
@@ -151,21 +150,39 @@ class Text(Widget):
             self.static = True
 
         self.font = ImageFont.truetype(font_path, font_size)
-        self.align = "ls" if align == "left" else "rs"
+        # normalize alignment into 'left', 'right' or 'center'
+        a = (align or "").lower()
+        if a.startswith("l"):
+            self.halign = "left"
+        elif a.startswith("r"):
+            self.halign = "right"
+        elif a.startswith("c"):
+            self.halign = "center"
+        else:
+            self.halign = "left"
+
         self.colors["text"] = color
         self.w = 0
         self.h = 0
         self.pos = pos
         self.rot = rot
 
-        if self._bg is None:
-            self._update_w_h()
-            self._bg = Image.new('RGBA', (self.w + 4, self.h + 4), color=self.colors["transparent"])
-            if self.static:
-                draw = ImageDraw.Draw(self._bg)
-                draw.text((2, 2), str(self.data), font=self.font, fill=self.colors["text"])
-                if self.rot:
-                    self._bg.rotate(self.rot, expand=True)
+        # initialize background based on exact text bbox
+        self._update_w_h()
+        self._bg = Image.new('RGBA', (self.w + 4, self.h + 4), color=self.colors["transparent"])
+        if self.static:
+            draw = ImageDraw.Draw(self._bg)
+            if self.halign == "left":
+                x = 2
+            elif self.halign == "right":
+                x = self._bg.width - 2 - self.w
+            else:
+                x = (self._bg.width - self.w) // 2
+            # account for font bbox top offset so tall glyphs don't get cut
+            y = 2 - self._bbox[1]
+            draw.text((x, y), str(self.data), font=self.font, fill=self.colors["text"])
+            if self.rot:
+                self._bg = self._bg.rotate(self.rot, expand=True)
 
     @property
     def bg(self):
@@ -175,14 +192,26 @@ class Text(Widget):
     def fg(self):
         if not self.static:
             self._update_w_h()
-            self._fg = Image.new('RGBA', self._bg.size, color=self.colors["transparent"])
+            self._fg = Image.new('RGBA', (self.w + 4, self.h + 4), color=self.colors["transparent"])
             draw = ImageDraw.Draw(self._fg)
-            draw.rectangle((0, 0, self.w + 4, self.h + 4), fill=self.colors["transparent"])
-            draw.text((2, 2), str(self.data), font=self.font, fill=self.colors["text"], align=self.align)
+            if self.halign == "left":
+                x = 2
+            elif self.halign == "right":
+                x = self._fg.width - 2 - self.w
+            else:
+                x = (self._fg.width - self.w) // 2
+            y = 2 - self._bbox[1]
+            draw.text((x, y), str(self.data), font=self.font, fill=self.colors["text"])
             if self.rot:
                 return self._fg.rotate(self.rot, expand=True)
         return self._fg
 
     def _update_w_h(self):
-        bbox = self.font.getbbox(self.data, mode="ltr" if self.align == "left" else "rtl")
-        self.w, self.h = 3*(bbox[2] - bbox[0])//2, 2*(bbox[3] - bbox[1])
+        # compute exact text bbox for current string
+        text = str(self.data)
+        bbox = self.font.getbbox(text)
+        # store full bbox so drawing can be offset to avoid clipping
+        self._bbox = bbox
+        text_w = bbox[2] - bbox[0]
+        text_h = bbox[3] - bbox[1]
+        self.w, self.h = text_w, text_h

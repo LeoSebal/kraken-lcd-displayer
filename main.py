@@ -6,7 +6,7 @@ import argparse
 import threading
 from PIL import Image, ImageDraw, ImageFont
 from liquidctl import find_liquidctl_devices
-import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt  # for debug sessions
 
 import widgets
 from stats import get_cpu_temp, get_cpu_load, get_gpu_temp, get_gpu_load
@@ -142,6 +142,7 @@ class Kraken():
     @property
     def cpu_load(self):
         return get_cpu_load()
+
     @property
     def gpu_temp(self):
         return get_gpu_temp()
@@ -164,7 +165,7 @@ class Kraken():
         self.widgets = {
             "cpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.cpu_temp),
             "cpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, data_updater=lambda: self.cpu_load, rot=0),
-            "cpu_temp_text": widgets.Text(lambda: f"{int(self.cpu_temp)}°C", font_path, 120),
+            "cpu_temp_text": widgets.Text(lambda: f"{int(self.cpu_temp)}°C", font_path, 120, align="lb"),
             "gpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.gpu_temp, rot=180),
             "gpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, data_updater=lambda: self.gpu_load, rot=180),
             "gpu_temp_text": widgets.Text(lambda: f"{int(self.gpu_temp)}°C", font_path, 120, align="rt"),
@@ -218,11 +219,7 @@ class Kraken():
 
     def update_frame(self):
         self._fg = Image.new('RGBA', self._resolution, color=(0, 0, 0, 0))
-        for name, widget in self.widgets.items():
-            update_widget = widget.update()
-            # if update_widget and widget.fg:
-            draw = ImageDraw.Draw(self._fg)
-            # draw.rectangle((*widget.pos, widget.pos[0]+widget.width, widget.pos[1]+widget.height), fill="#00000000", outline="red")
+        for widget in self.widgets.values():
             self._fg.paste(widget.fg, widget.pos, widget.fg)
 
         self.frame = Image.alpha_composite(self._bg, self._fg)
@@ -283,6 +280,5 @@ if __name__ == "__main__":
         kraken.update_frame()
         # The debugging mode is a direct display mode, that displays the UI in a Matplotlib plot
         if debug:
-            kraken._ax.clear()
             kraken._ax.imshow(kraken.frame)
             plt.pause(1/kraken._fps) # Small pause to allow GUI events to process
