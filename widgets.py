@@ -90,14 +90,15 @@ class LineGraphic(Widget):
 
     @property
     def fg(self):
-        # Recreate image to ensure a clean transparent canvas
-        fg = Image.new('RGBA', (self.length, self.line_width), color=self.colors["transparent"])
-        draw = ImageDraw.Draw(fg)
-        fill = int((self.data / 100) * self.length)
-        draw.rectangle((0, 0, fill, self.line_width), fill=self.colors["front"])
+        if self._fg is None or self.update():
+            # Recreate image to ensure a clean transparent canvas
+            self._fg = Image.new('RGBA', (self.length, self.line_width), color=self.colors["transparent"])
+            draw = ImageDraw.Draw(self._fg)
+            fill = int((self.data / 100) * self.length)
+            draw.rectangle((0, 0, fill, self.line_width), fill=self.colors["front"])
         if self.rot:
-            return fg.rotate(self.rot, expand=True)
-        return fg
+            return self._fg.rotate(self.rot, expand=True)
+        return self._fg
 
 
 
@@ -128,14 +129,15 @@ class ArcGraphic(Widget):
 
     @property
     def fg(self):
-        fg = Image.new('RGBA', (self.size, self.size), color=self.colors["transparent"])
-        draw = ImageDraw.Draw(fg)
-        bbox = (self.line_width//2, self.line_width//2, self.size - self.line_width//2, self.size - self.line_width//2)
-        end_angle = (self.data / 100) * self.angle + self.start_angle
-        draw.arc(bbox, start=self.start_angle, end=end_angle, fill=self.colors["front"], width=self.line_width)
+        if self._fg is None or self.update():
+            self._fg = Image.new('RGBA', (self.size, self.size), color=self.colors["transparent"])
+            draw = ImageDraw.Draw(self._fg)
+            bbox = (self.line_width//2, self.line_width//2, self.size - self.line_width//2, self.size - self.line_width//2)
+            end_angle = (self.data / 100) * self.angle + self.start_angle
+            draw.arc(bbox, start=self.start_angle, end=end_angle, fill=self.colors["front"], width=self.line_width)
         if self.rot:
-            return fg.rotate(self.rot, expand=True)
-        return fg
+            return self._fg.rotate(self.rot, expand=True)
+        return self._fg
 
 
 
@@ -190,7 +192,7 @@ class Text(Widget):
 
     @property
     def fg(self):
-        if not self.static:
+        if (self._fg is None or self.update()) and not self.static:
             self._update_w_h()
             self._fg = Image.new('RGBA', (self.w + 4, self.h + 4), color=self.colors["transparent"])
             draw = ImageDraw.Draw(self._fg)
@@ -202,8 +204,8 @@ class Text(Widget):
                 x = (self._fg.width - self.w) // 2
             y = 2 - self._bbox[1]
             draw.text((x, y), str(self.data), font=self.font, fill=self.colors["text"])
-            if self.rot:
-                return self._fg.rotate(self.rot, expand=True)
+        if self.rot:
+            return self._fg.rotate(self.rot, expand=True)
         return self._fg
 
     def _update_w_h(self):
