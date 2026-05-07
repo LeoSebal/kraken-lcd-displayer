@@ -17,6 +17,7 @@ HEIGHT = 640  # height of the frame to be displayed
 WIDTH = 640  # width of the frame to be displayed
 RADIUS = 320  # actual radius of the Kraken Elite LCD
 CROOK_ANGLE = 0  # angle mounting error
+MAX_NB_ATTEMPTS = 3
 
 global kraken
 
@@ -70,9 +71,9 @@ class Kraken():
         # Background image (only static allowed for now)
         self._bg_image = None
         # Display angle
-        self._angle = 30
+        self._angle = 0
         # FPS to be displayed on-screen
-        self._fps = 10
+        self._fps = 15
         self._last_tick = time.time()
         # Rate at which data is polled 
         self._poll_rate = 0.5
@@ -91,6 +92,7 @@ class Kraken():
         self._frame_lock = threading.Lock()
         self._frame_ready = threading.Condition(self._frame_lock)
         self.current_frame_data = None
+        self._last_frame_data = None
 
 
     @property
@@ -132,7 +134,6 @@ class Kraken():
         else:
             raise ValueError("FPS must be between 1 and 30")
 
-
     @property
     def angle(self):
         return self._angle
@@ -171,10 +172,10 @@ class Kraken():
         self.widgets = {
             "cpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.cpu_temp),
             "cpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, data_updater=lambda: self.cpu_load, rot=0),
-            "cpu_temp_text": widgets.Text(lambda: f"{self.cpu_temp:.0f}°C", font_path, 120, align="lb"),
+            "cpu_temp_text": widgets.Text(lambda: f"{round(self.cpu_temp)}°C", font_path, 120, align="lb"),
             "gpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.gpu_temp, rot=180),
             "gpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, data_updater=lambda: self.gpu_load, rot=180),
-            "gpu_temp_text": widgets.Text(lambda: f"{self.gpu_temp:.0f}°C", font_path, 120, align="rt"),
+            "gpu_temp_text": widgets.Text(lambda: f"{round(self.gpu_temp)}°C", font_path, 120, align="rt"),
         }
 
         # Define placement: (x, y) coordinates, which edge to align (offset from center) and rotation angle
@@ -221,14 +222,21 @@ class Kraken():
             bg = widget.bg
             self._bg.paste(bg, widget.pos, bg)
             fg = widget.fg
-            self._fg.paste(fg, widget.pos, fg)
+            if widget.fg:
+                self._fg.paste(fg, widget.pos, fg)
 
 
     def update_frames(self):
         self._fg = Image.new('RGBA', self._resolution, color=(0, 0, 0, 0))
-        for name, widget in self.widgets.items():
+        frame_changed = False
+        for widget in self.widgets.values():
+            frame_changed |= bool(widget.update())
             fg = widget.fg
-            self._fg.paste(fg, widget.pos, fg)
+            if fg:
+                self._fg.paste(fg, widget.pos, fg)
+
+        if self.current_frame_data is not None and not frame_changed:
+            return
 
         frame = Image.alpha_composite(self._bg, self._fg)
         if not self.debug:
@@ -246,30 +254,48 @@ class Kraken():
             duration=int(1000 / self._fps),
             loop=0,
         )
+        payload = buffer.getvalue()
+
+        if payload == self._last_frame_data:
+            return
+
+        self._last_frame_data = payload
         with self._frame_ready:
-            self.current_frame_data = buffer.getvalue()
+            self.current_frame_data = payload
             self._frame_ready.notify_all()
+
+
+    def _send_payload(self, payload):
+        if not getattr(self, 'device', None):
+            return
+
+        for attempt in range(1, MAX_NB_ATTEMPTS + 1):
+            if hasattr(self.device, 'clear_enqueued_reports'):
+                try:
+                    self.device.clear_enqueued_reports()
+                except Exception:
+                    print("Warning: Failed to clear enqueued reports. Continuing with sending the frame.")
+
+            try:
+                with io.BytesIO(payload) as stream:
+                    self.device.set_screen('lcd', 'gif', stream)
+                return
+            except Exception as e:
+                message = str(e).lower()
+                if attempt >= 3 or not any(word in message for word in ('bucket', 'usb', 'langid', 'timeout', 'failed')):
+                    print(f"USB Communication Error: {e}")
+                    return
+                time.sleep(0.2)
 
 
     def display(self):
         while True:
-            # Wait for the next GIF payload before sending
             with self._frame_ready:
                 self._frame_ready.wait()
                 data_to_send = self.current_frame_data
 
             if data_to_send and not self.debug:
-                try:
-                    # Wrap the bytes in BytesIO so liquidctl treats it as a stream, not a path
-                    with io.BytesIO(data_to_send) as stream:
-                        # Note: 'animation' is the standard liquidctl mode for GIF/AVI on Kraken Elite
-                        self.device.set_screen('lcd', 'gif', stream)
-                except Exception as e:
-                    # Handle USB congestion (liquidctl bucket errors)
-                    if "bucket" in str(e).lower():
-                        time.sleep(0.1)
-                    else:
-                        print(f"USB Communication Error: {e}")
+                self._send_payload(data_to_send)
 
 
     def run(self):
