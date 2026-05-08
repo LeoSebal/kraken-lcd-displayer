@@ -248,11 +248,11 @@ class Kraken():
         buffer = io.BytesIO()
         self._frames[0].convert("P", palette=Image.ADAPTIVE).save(
             buffer,
-            format='GIF',
+            format='PNG',
             save_all=True,
-            append_images=self._frames[1:],
-            duration=int(1000 / self._fps),
-            loop=0,
+            # append_images=self._frames[1:],
+            # duration=int(1000 / self._fps),
+            # loop=0,
         )
         payload = buffer.getvalue()
 
@@ -278,7 +278,7 @@ class Kraken():
 
             try:
                 with io.BytesIO(payload) as stream:
-                    self.device.set_screen('lcd', 'gif', stream)
+                    self.device.set_screen('lcd', 'static', stream)
                 return
             except Exception as e:
                 message = str(e).lower()
