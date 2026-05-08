@@ -73,7 +73,6 @@ class LineGraphic(Widget):
         super().__init__(data_updater)
         self.length = length
         self.line_width = line_width
-        # self._center = (self.length//2, self.line_width//2)
         self.pos = pos
         self.rot = rot
         if colors:

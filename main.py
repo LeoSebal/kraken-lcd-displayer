@@ -4,6 +4,8 @@ import time
 import warnings
 import argparse
 import threading
+import signal
+import sys
 from PIL import Image, ImageDraw, ImageFont
 from liquidctl import find_liquidctl_devices
 import matplotlib.pyplot as plt  # for debug sessions
@@ -15,15 +17,13 @@ from hwmon import get_cpu_temp, get_cpu_load, get_gpu_temp, get_gpu_load
 
 HEIGHT = 640  # height of the frame to be displayed
 WIDTH = 640  # width of the frame to be displayed
-RADIUS = 320  # actual radius of the Kraken Elite LCD
-CROOK_ANGLE = 0  # angle mounting error
+RADIUS = min(HEIGHT//2, WIDTH//2)  # actual radius of the Kraken Elite LCD
 MAX_NB_ATTEMPTS = 3
 
 global kraken
 
-
-
 _FONT_CACHE = {}
+running = True
 
 def get_font(size=30):
     if size not in _FONT_CACHE:                                 
@@ -58,7 +58,8 @@ class Kraken():
                             print(f"Error connecting to device: {e}")
         else:
             self._fig, self._ax = plt.subplots()
-            # self.ax.remove()
+
+        self.mode = 'static'
 
         self._cpu_temp = 0
         self._gpu_temp = 0
@@ -80,7 +81,7 @@ class Kraken():
         self._last_stats_update = time.time()
         # Rate at which we display onto the Kraken.
         # Will have to be calculated depending on GIF duration (when that is supported) and poll rate
-        self._push_rate = 1
+        self._push_rate = 5
         self._last_push = time.time()
 
         self.frames = []
@@ -240,20 +241,25 @@ class Kraken():
 
         frame = Image.alpha_composite(self._bg, self._fg)
         if not self.debug:
-            frame = frame.rotate(self._angle+CROOK_ANGLE, resample=Image.BICUBIC)
-
-        frame_count = max(1, round(self._fps / self._push_rate))
-        self._frames = [frame] * frame_count
+            frame = frame.rotate(self._angle, resample=Image.BICUBIC)
 
         buffer = io.BytesIO()
-        self._frames[0].convert("P", palette=Image.ADAPTIVE).save(
-            buffer,
-            format='PNG',
-            save_all=True,
-            # append_images=self._frames[1:],
-            # duration=int(1000 / self._fps),
-            # loop=0,
-        )
+
+        if self.mode == 'static':
+            self.frames = [frame]
+            self.frames[0].save(buffer, format='PNG')
+        elif self.mode == 'gif':
+            frame_count = max(1, round(self._fps / self._push_rate))
+            self.frames = [frame] * frame_count
+            self.frames[0].convert("P", palette=Image.ADAPTIVE).save(
+                buffer,
+                format='GIF',
+                save_all=True,
+                append_images=self.frames[1:],
+                duration=int(1000 / self._fps),
+                loop=0,
+            )
+
         payload = buffer.getvalue()
 
         if payload == self._last_frame_data:
@@ -298,11 +304,17 @@ class Kraken():
                 self._send_payload(data_to_send)
 
 
+    def stop(self):
+        global running
+        running = False
+        if not self.debug and hasattr(self, 'device'):
+            self.device.disconnect()
+
     def run(self):
         # Send data to display in a separate thread while the main loop updates the frames
-        if not debug:
+        if not self.debug:
             threading.Thread(target=kraken.display, daemon=True).start()
-        while True:
+        while running:
             self.update_frames()
             if not self.debug:
                 time.sleep(1 / self._push_rate)
@@ -321,9 +333,17 @@ def arg_parser():
 
 
 
+def handle_signal(signum, frame):
+    kraken.stop()
+    sys.exit(0)
+
 if __name__ == "__main__":
     args = arg_parser()
     debug = args.debug
     kraken = Kraken(debug=debug)
+    
+    signal.signal(signal.SIGTERM, handle_signal)
+    signal.signal(signal.SIGINT, handle_signal)
+
     kraken.init_frame()
     kraken.run()

@@ -1,0 +1,16 @@
+[Unit]
+Description=Kraken LCD Custom Display Daemon
+After=network.target
+
+[Service]
+Type=simple
+User=$USER
+WorkingDirectory=/mnt/data/projects/kraken-lcd-control
+ExecStart=/mnt/data/projects/kraken-lcd-control/.venv/bin/python3 main.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

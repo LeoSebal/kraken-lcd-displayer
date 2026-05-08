@@ -54,10 +54,8 @@ match gpu_brand:
         pynvml.nvmlInit()
         _NV_HANDLE = pynvml.nvmlDeviceGetHandleByIndex(0)
 
-        # get_gpu_temp = get_gpu_temp_nvidia
-        # get_gpu_load = get_gpu_load_nvidia
-        get_gpu_temp = lambda: randint(30, 70)  # Placeholder: return random temp between 30-70°C
-        get_gpu_load = lambda: randint(0, 100)  # Placeholder: return random load between 0-100%
+        get_gpu_temp = get_gpu_temp_nvidia
+        get_gpu_load = get_gpu_load_nvidia
 
     case 'intel':
         # raise NotImplementedError("GPU monitoring for Intel GPUs is not implemented yet.")
