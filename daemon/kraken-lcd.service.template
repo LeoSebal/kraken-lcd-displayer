@@ -4,9 +4,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=$USER
-WorkingDirectory=/mnt/data/projects/kraken-lcd-control
-ExecStart=/mnt/data/projects/kraken-lcd-control/.venv/bin/python3 main.py
+User=root
+WorkingDirectory=$CWD
+ExecStart=sudo $CWD/$ENV_NAME/bin/python3 main.py
 Restart=always
 RestartSec=5
 StandardOutput=journal

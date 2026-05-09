@@ -1,12 +1,42 @@
 # Kraken LCD Displayer
 
-The objective of this project is to be able to control and fine-tune the LCD display of my Kraken Elite 2023.
-That means displaying CPU and GPU temps and loads, 
-It is therefore built for my config: Kraken Elite and Nvidia GPU.
+This project allows you to create and customize the display on NZXT's Kraken AIOs. It relies on liquidctl's ability to communicate with the device, in a more customizable manner than what CoolerControl allows.
+That means displaying CPU, GPU and liquid temperature, CPU and GPU loads.
 
-It originated from the fact that, right before I switched to Linux, I had spent 3h designing a nice looking frame using [NZXT-ESC](https://github.com/mrgogo7/nzxt-esc).
-Besides. I wanted support for non-90° angles, because my own liquid cooler is angled at 30°, so there's that too.
+Its feature set is largely inspired by mrgogo7's [NZXT-ESC](https://github.com/mrgogo7/nzxt-esc/), without the CAM integration that makes it so efficient. This project actually started because, right before switching to Linux, I had just found out about this software and spent a few hours creating an overlay I liked.
+All of the NZXT-ESC's features haven't been implemented, and some will probably never be, most notably animations, for reasons I cover lower down.
 
-* As of now, I am able to send a regularly updated frame that contains GPU and CPU temps at ~1FPS, but the display blinks to black on a regular basis.
-* Next step will be to have a pretty-looking image to be displayed (that was the case at an earlier point, before I refactored everything), and then to have a stable frame.
-* Ultimately, I'd like to be able to support a GIF stream with custom overlays, and maybe even to be able to take a NZXT-ESC JSON as input.
+## Requirements
+
+* [**liquidctl**](https://github.com/liquidctl/liquidctl/): the software actually in charge of the communication with the LCD.
+* [**uv**](https://docs.astral.sh/uv/getting-started/installation/): to manage the virtual environment used by this project.
+* If you use CoolerControl, it is necessary to disable its hold of the Kraken's display: in the list of devices, look for your Kraken AIO's LCD display, click "More options" and disable it. CoolerControl's GUI and its daemon will restart and release CoolerControl's hold on the device, allowing the daemon to run.
+
+## Installation
+
+Run `install.sh`.
+
+## Uninstallation
+
+Run `uninstall.sh`.
+
+## Features
+
+[x] Display a custom image
+[x] Display CPU load & temperature, GPU load and temperature, liquid temperature
+[x] Free rotation angles (by default, liquidctl only supports multiples of 90°)
+[ ] Profile manager
+[ ] Background image
+[ ] NZXT-ESC profile load
+[ ] Gradient-colored widgets
+
+## Known issues
+
+### Screen turns to black once in a while
+
+This is due to liquidctl's driver, which is known to be unstable. Unfortunately, there is little I can do about this at this point, unless improving liquidctl's code directly, which is not my goal in the immediate term. If you have used CoolerControl, you may have noticed similar issues.
+
+### About GIF support and why it's probably not coming
+
+Using liquidctl's API, you can send a GIF to the overlay, or you can send a static image. The data transfer rate of the Kraken display is through USB 2.0 (that's low, even for the 640x640 screen of the Kraken), and liquidctl's reverse-engineering doesn't allow overlaying of GIFs with static images or partial frame updates, which would be necessary for this to work. Moreover, updating a GIF resets the screen, which makes it blink every time a GIF is sent to the device.
+This makes it seem unlikely to be possible to display GIF overlays at a comfortable framerate at this time.

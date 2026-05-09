@@ -1,9 +1,11 @@
 import io
+import logging
 from pathlib import Path
 import time
 import warnings
 import argparse
 import threading
+from logging.handlers import RotatingFileHandler
 import signal
 import sys
 from PIL import Image, ImageDraw, ImageFont
@@ -21,6 +23,19 @@ RADIUS = min(HEIGHT//2, WIDTH//2)  # actual radius of the Kraken Elite LCD
 MAX_NB_ATTEMPTS = 3
 
 global kraken
+
+# Configure Logging
+log_file = Path(__file__).parent / "kraken-lcd.logs"
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    handlers=[
+        RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=2),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logging.captureWarnings(True)
+logger = logging.getLogger(__name__)
 
 _FONT_CACHE = {}
 running = True
@@ -53,9 +68,9 @@ class Kraken():
                         self.device = dev
                     except Exception as e:
                         if "langid" in str(e) or "Access denied" in str(e):
-                            print("Error: Permission denied. Please check your udev rules or run with sudo.")
+                            logger.error("Permission denied. Please check your udev rules or run with sudo.")
                         else:
-                            print(f"Error connecting to device: {e}")
+                            logger.error(f"Error connecting to device: {e}")
         else:
             self._fig, self._ax = plt.subplots()
 
@@ -280,7 +295,7 @@ class Kraken():
                 try:
                     self.device.clear_enqueued_reports()
                 except Exception:
-                    print("Warning: Failed to clear enqueued reports. Continuing with sending the frame.")
+                    logger.warning("Failed to clear enqueued reports. Continuing with sending the frame.")
 
             try:
                 with io.BytesIO(payload) as stream:
@@ -289,7 +304,7 @@ class Kraken():
             except Exception as e:
                 message = str(e).lower()
                 if attempt >= 3 or not any(word in message for word in ('bucket', 'usb', 'langid', 'timeout', 'failed')):
-                    print(f"USB Communication Error: {e}")
+                    logger.error(f"USB Communication Error: {e}")
                     return
                 time.sleep(0.2)
 
@@ -337,11 +352,13 @@ def handle_signal(signum, frame):
     kraken.stop()
     sys.exit(0)
 
+
+
 if __name__ == "__main__":
     args = arg_parser()
     debug = args.debug
     kraken = Kraken(debug=debug)
-    
+
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 

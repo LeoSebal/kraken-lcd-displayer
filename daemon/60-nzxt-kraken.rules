@@ -1,0 +1,4 @@
+# NZXT HID devices
+SUBSYSTEMS=="usb", ATTRS{idVendor}=="1e71", MODE="0660", GROUP="wheel", TAG+="uaccess"
+SUBSYSTEMS=="usb-devices", ATTRS{idVendor}=="1e71", MODE="0660", GROUP="wheel", TAG+="uaccess"
+

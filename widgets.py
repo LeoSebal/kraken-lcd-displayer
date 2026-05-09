@@ -1,6 +1,9 @@
 from typing import Callable
 from PIL import Image, ImageDraw, ImageFont
 
+TRANSPARENT = "#FFFFFF00"
+DEBUG = "#9A4CB8"
+
 
 
 class Widget():
@@ -12,11 +15,9 @@ class Widget():
         self.data = data_updater() if callable(data_updater) else 0
         self._center = (0,0)
         self.colors = {
-            "transparent": "#FFFFFF00",
             "bg": "#616783",
             "front": "#00FFFF",
-            "text": None,
-            "debug": "#9A4CB8"
+            "text": "#FFFFFF",
         }
         self.pos = (0,0)
         self.rot = (0,0)
@@ -91,7 +92,7 @@ class LineGraphic(Widget):
     def fg(self):
         if self._fg is None or self.update():
             # Recreate image to ensure a clean transparent canvas
-            self._fg = Image.new('RGBA', (self.length, self.line_width), color=self.colors["transparent"])
+            self._fg = Image.new('RGBA', (self.length, self.line_width), color=TRANSPARENT)
             draw = ImageDraw.Draw(self._fg)
             fill = int((self.data / 100) * self.length)
             draw.rectangle((0, 0, fill, self.line_width), fill=self.colors["front"])
@@ -115,7 +116,7 @@ class ArcGraphic(Widget):
                 self.colors[k] = v
 
         self.size = 2 * self.radius + self.line_width
-        self._bg = Image.new('RGBA', (self.size, self.size), color=self.colors["transparent"])
+        self._bg = Image.new('RGBA', (self.size, self.size), color=TRANSPARENT)
         draw = ImageDraw.Draw(self._bg)
         bbox = (self.line_width//2, self.line_width//2, self.size - self.line_width//2, self.size - self.line_width//2)
         draw.arc(bbox, start=self.start_angle, end=self.start_angle + self.angle, fill=self.colors["bg"], width=self.line_width)
@@ -129,7 +130,7 @@ class ArcGraphic(Widget):
     @property
     def fg(self):
         if self._fg is None or self.update():
-            self._fg = Image.new('RGBA', (self.size, self.size), color=self.colors["transparent"])
+            self._fg = Image.new('RGBA', (self.size, self.size), color=TRANSPARENT)
             draw = ImageDraw.Draw(self._fg)
             bbox = (self.line_width//2, self.line_width//2, self.size - self.line_width//2, self.size - self.line_width//2)
             end_angle = (self.data / 100) * self.angle + self.start_angle
@@ -170,7 +171,7 @@ class Text(Widget):
 
         # initialize background based on exact text bbox
         self._update_w_h()
-        self._bg = Image.new('RGBA', (self.w + 4, self.h + 4), color=self.colors["transparent"])
+        self._bg = Image.new('RGBA', (self.w + 4, self.h + 4), color=TRANSPARENT)
         if self.static:
             draw = ImageDraw.Draw(self._bg)
             if self.halign == "left":
@@ -193,7 +194,7 @@ class Text(Widget):
     def fg(self):
         if (self._fg is None or self.update()) and not self.static:
             self._update_w_h()
-            self._fg = Image.new('RGBA', (self.w + 4, self.h + 4), color=self.colors["transparent"])
+            self._fg = Image.new('RGBA', (self.w + 4, self.h + 4), color=TRANSPARENT)
             draw = ImageDraw.Draw(self._fg)
             if self.halign == "left":
                 x = 2
