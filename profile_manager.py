@@ -1,11 +1,22 @@
 # WIP
 from pathlib import Path
-import yaml
-# import json
+import ruamel.yaml as yaml
 
-import widgets
+from widgets import LineGraphic, ArcGraphic, Text
+from hwmon import get_cpu_temp, get_cpu_load, get_gpu_temp, get_gpu_load
+
+
 
 DEFAULT_PROFILE = "default.yaml"
+
+
+hwmon_functions = {
+    'cpu_load': get_cpu_load,
+    'gpu_load': get_gpu_load,
+    'cpu_temp': get_cpu_temp,
+    'gpu_temp': get_gpu_temp,
+    'liquid_temp': get_liq_temp,
+}
 
 
 
@@ -37,9 +48,9 @@ class ProfileManager:
 class WidgetProfile(Widget):
     def __init__(self, widget_data:dict, ref_colors = {}):
         generic_keys = [
-            "position", "height", "width", "rotation", "alpha"
+            "name", "position", "height", "width", "rotation", "alpha"
         ]
-        # Load position
+        # Generic widget properties
         for key in generic_keys:
             if key in widget_data.value():
                 setattr(self, key, widget_data[key])
@@ -50,3 +61,7 @@ class WidgetProfile(Widget):
             for color_key, color in widget_data["colors"].items():
                 if ref_colors[color_key] != color:
                     self.colors[color_key] = color
+
+        # hwmon functions
+        if "source_metric" in widget_data.keys():
+            self.data_updater = hwmon_functions[widget_data["source_metric"]]

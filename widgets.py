@@ -1,4 +1,5 @@
-from typing import Callable
+from typing import Any, Callable
+from pydantic import BaseModel, Field, PrivateAttr, field_serializer
 from PIL import Image, ImageDraw, ImageFont
 
 TRANSPARENT = "#FFFFFF00"
@@ -6,21 +7,22 @@ DEBUG = "#9A4CB8"
 
 
 
-class Widget():
-    def __init__(self, data_updater: Callable = None):
-                #  drawer:Callable = None, data=Callable):
-        self._bg = None
-        self._fg = None
-        self.data_updater = data_updater
-        self.data = data_updater() if callable(data_updater) else 0
-        self._center = (0,0)
-        self.colors = {
-            "bg": "#616783",
-            "front": "#00FFFF",
-            "text": "#FFFFFF",
-        }
-        self.pos = (0,0)
-        self.rot = (0,0)
+class Widget(BaseModel):
+    colors: dict[str, str | tuple[int,int,int,int]] = {
+        "bg": "#616783",
+        "front": "#00FFFF",
+        "stroke": TRANSPARENT,
+        "text": "#FFFFFF",
+    }
+    pos: tuple[int,int]             = (0,0)                         # position of the image (x,y)
+    rot: int                        = 0                             # rotation (degrees)
+    _bg: Image.Image | None         = PrivateAttr(default=None)     # background image
+    _fg: Image.Image | None         = PrivateAttr(default=None)     # foreground image
+    _data_updater: Callable | None  = PrivateAttr(default=None)     # data function
+    _data: Any                      = PrivateAttr(default=0)        # data content
+    _center: tuple[int,int]         = PrivateAttr(default=(0,0))    # center of the image (x,y)
+    _width: int                     = PrivateAttr(default=0)        # width of the image
+    _height: int                    = PrivateAttr(default=0)        # height of the image
 
     @property
     def bg(self):
@@ -39,12 +41,12 @@ class Widget():
         self._fg = value
 
     def update(self):
-        if self.data_updater is not None:
-            new_data = self.data_updater()
-            if new_data != self.data:
-                self.data = new_data
-                return 1  # frame updated
-        return 0  # frame not updated
+        if self._data_updater is not None:
+            new_data = self._data_updater()
+            if new_data != self._data:
+                self._data = new_data
+                return True  # frame updated
+        return False  # frame not updated
 
     @property
     def center(self):
@@ -54,7 +56,7 @@ class Widget():
             return self._center
 
     def __str__(self):
-        return f"{type(self).__name__}@{self.pos}, value={self.data}"
+        return f"{type(self).__name__}@{self.pos}, value={self._data}"
 
     def __repr__(self):
         return f"{self.__class__}, {self.__dict__}"
@@ -70,23 +72,18 @@ class Widget():
 
 
 class LineGraphic(Widget):
-    def __init__(self, length, line_width, colors=None, data_updater=None, pos=(0,0), rot=0):
-        super().__init__(data_updater)
-        self.length = length
-        self.line_width = line_width
-        self.pos = pos
-        self.rot = rot
-        if colors:
-            self.colors.update(colors)
+    length:int
+    line_width:int
+    corners:tuple[bool,bool,bool,bool]  = (False,False,False,False)
+    data_updater:Callable               = Field(exclude=True)
 
+    def model_post_init(self, _):
         # Pre-initialize layers to avoid repeated allocations
-        self._bg = Image.new('RGBA', (length, self.line_width), color=self.colors["bg"])
+        self._bg = Image.new('RGBA', (self.length, self.line_width), color=TRANSPARENT)
+        draw = ImageDraw.Draw(self._bg)
+        draw.rounded_rectangle((0, 0, self.length, self.line_width), fill=self.colors["bg"], corners=self.corners)
         if self.rot:
             self._bg = self._bg.rotate(self.rot, expand=True)
-
-    @property
-    def bg(self):
-        return self._bg
 
     @property
     def fg(self):
@@ -94,8 +91,8 @@ class LineGraphic(Widget):
             # Recreate image to ensure a clean transparent canvas
             self._fg = Image.new('RGBA', (self.length, self.line_width), color=TRANSPARENT)
             draw = ImageDraw.Draw(self._fg)
-            fill = int((self.data / 100) * self.length)
-            draw.rectangle((0, 0, fill, self.line_width), fill=self.colors["front"])
+            fill = int((self._data / 100) * self.length)
+            draw.rounded_rectangle((0, 0, fill, self.line_width), fill=self.colors["front"], corners=self.corners)
         if self.rot:
             return self._fg.rotate(self.rot, expand=True)
         return self._fg
@@ -103,22 +100,18 @@ class LineGraphic(Widget):
 
 
 class ArcGraphic(Widget):
-    def __init__(self, angle, radius, line_width, start_angle=90, colors={}, data_updater=None, pos=(0,0), rot=0):
-        super().__init__(data_updater)
-        self.start_angle = start_angle
-        self.angle = angle
-        self.radius = radius
-        self.line_width = line_width
-        self.pos = pos
-        self.rot = rot
-        if colors:
-            for k,v in colors.items():
-                self.colors[k] = v
+    radius:int
+    line_width:int
+    angle:int
+    start_angle:int = 90
+    color:dict      = None
+    _size: int      = PrivateAttr(default=0)
 
-        self.size = 2 * self.radius + self.line_width
-        self._bg = Image.new('RGBA', (self.size, self.size), color=TRANSPARENT)
+    def model_post_init(self, _):
+        self._size = 2 * self.radius + self.line_width
+        self._bg = Image.new('RGBA', (self._size, self._size), color=TRANSPARENT)
         draw = ImageDraw.Draw(self._bg)
-        bbox = (self.line_width//2, self.line_width//2, self.size - self.line_width//2, self.size - self.line_width//2)
+        bbox = (self.line_width//2, self.line_width//2, self._size - self.line_width//2, self._size - self.line_width//2)
         draw.arc(bbox, start=self.start_angle, end=self.start_angle + self.angle, fill=self.colors["bg"], width=self.line_width)
         if self.rot:
             self._bg = self._bg.rotate(self.rot, expand=True)
@@ -130,10 +123,10 @@ class ArcGraphic(Widget):
     @property
     def fg(self):
         if self._fg is None or self.update():
-            self._fg = Image.new('RGBA', (self.size, self.size), color=TRANSPARENT)
+            self._fg = Image.new('RGBA', (self._size, self._size), color=TRANSPARENT)
             draw = ImageDraw.Draw(self._fg)
-            bbox = (self.line_width//2, self.line_width//2, self.size - self.line_width//2, self.size - self.line_width//2)
-            end_angle = (self.data / 100) * self.angle + self.start_angle
+            bbox = (self.line_width//2, self.line_width//2, self._size - self.line_width//2, self._size - self.line_width//2)
+            end_angle = (self._data / 100) * self.angle + self.start_angle
             draw.arc(bbox, start=self.start_angle, end=end_angle, fill=self.colors["front"], width=self.line_width)
         if self.rot:
             return self._fg.rotate(self.rot, expand=True)
@@ -142,78 +135,87 @@ class ArcGraphic(Widget):
 
 
 class Text(Widget):
-    def __init__(self, text_source, font_path, font_size, color=(255, 255, 255, 255), align="lt", pos=(0,0), rot=0):
-        if callable(text_source):
-            super().__init__(text_source)
-            self.static = False
-        else:
-            super().__init__()
-            self.data = text_source
-            self.static = True
+    text_source:str|Callable            = Field(exclude=True)
+    font_path:str                       = "fonts/NZXTExtraBold-Regular.otf"
+    font_size:int                       = 50
+    color:str|tuple[int,int,int,int]    = Field(default=(255,255,255,255), exclude=True)
+    align:str                           = "lt"
+    _static: bool | None                = PrivateAttr(default=None)
+    _font: ImageFont.ImageFont | None   = PrivateAttr(default=None)
+    _bbox: tuple[int,int,int,int]       = PrivateAttr(default=(0,0,0,0))
 
-        self.font = ImageFont.truetype(font_path, font_size)
-        # normalize alignment into 'left', 'right' or 'center'
-        a = (align or "").lower()
-        if a.startswith("l"):
-            self.halign = "left"
-        elif a.startswith("r"):
-            self.halign = "right"
-        elif a.startswith("c"):
-            self.halign = "center"
+    def model_post_init(self, _):
+        if callable(self.text_source):
+            self._data_updater = self.text_source
+            self._static = False
         else:
-            self.halign = "left"
-
-        self.colors["text"] = color
-        self.w = 0
-        self.h = 0
-        self.pos = pos
-        self.rot = rot
+            self._data = self.text_source
+            self._static = True
+        self._font = ImageFont.truetype(self.font_path, self.font_size)
+        self.align = self.align.lower()
+        self.colors["text"] = self.color
 
         # initialize background based on exact text bbox
-        self._update_w_h()
-        self._bg = Image.new('RGBA', (self.w + 4, self.h + 4), color=TRANSPARENT)
-        if self.static:
+        self._bg = Image.new('RGBA', (self.width + 4, self.height + 4), color=TRANSPARENT)
+        if self._static:
             draw = ImageDraw.Draw(self._bg)
-            if self.halign == "left":
-                x = 2
-            elif self.halign == "right":
-                x = self._bg.width - 2 - self.w
-            else:
-                x = (self._bg.width - self.w) // 2
-            # account for font bbox top offset so tall glyphs don't get cut
+            x = 2 - self._bbox[0]
             y = 2 - self._bbox[1]
-            draw.text((x, y), str(self.data), font=self.font, fill=self.colors["text"])
+            draw.text((x, y), str(self._data), font=self._font, fill=self.colors["text"])
             if self.rot:
                 self._bg = self._bg.rotate(self.rot, expand=True)
 
     @property
-    def bg(self):
-        return self._bg
-
-    @property
     def fg(self):
-        if (self._fg is None or self.update()) and not self.static:
-            self._update_w_h()
-            self._fg = Image.new('RGBA', (self.w + 4, self.h + 4), color=TRANSPARENT)
+        if (self._fg is None or self.update()) and not self._static:
+            self._fg = Image.new('RGBA', (self.width + 4, self.height + 4), color=TRANSPARENT)
             draw = ImageDraw.Draw(self._fg)
-            if self.halign == "left":
-                x = 2
-            elif self.halign == "right":
-                x = self._fg.width - 2 - self.w
-            else:
-                x = (self._fg.width - self.w) // 2
+            x = 2 - self._bbox[0]
             y = 2 - self._bbox[1]
-            draw.text((x, y), str(self.data), font=self.font, fill=self.colors["text"])
+            draw.text((x, y), str(self._data), font=self._font, fill=self.colors["text"])
         if self.rot:
             return self._fg.rotate(self.rot, expand=True)
         return self._fg
 
-    def _update_w_h(self):
-        # compute exact text bbox for current string
-        text = str(self.data)
-        bbox = self.font.getbbox(text)
-        # store full bbox so drawing can be offset to avoid clipping
-        self._bbox = bbox
-        text_w = bbox[2] - bbox[0]
-        text_h = bbox[3] - bbox[1]
-        self.w, self.h = text_w, text_h
+    @property
+    def width(self):
+        self._bbox = self._font.getbbox(str(self._data))
+        return self._bbox[2] - self._bbox[0]
+
+    @property
+    def height(self):
+        self._bbox = self._font.getbbox(str(self._data))
+        return self._bbox[3] - self._bbox[1]
+
+    @width.setter
+    def width(self, value):
+        self._width = value
+
+    @height.setter
+    def height(self, value):
+        self._height = value
+
+    @property
+    def pos(self):
+        return self._pos
+
+    @pos.setter
+    def pos(self, value):
+        match self.align[0]:
+            case "l":  # default is left-aligned
+                self._pos[0] = value[0]
+            case "r":
+                self._pos[0] = value[0] - self.width
+            case "m":
+                self._pos[0] = value[0] - self.width // 2
+            case _:
+                raise ValueError
+        match self.align[1]:
+            case "t":
+                self._pos[1] = value[1] - self.height
+            case "b":
+                self._pos[1] = value[1]
+            case "m":
+                self._pos[1] = value[1] - self.height // 2
+            case _:
+                raise ValueError

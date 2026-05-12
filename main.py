@@ -186,22 +186,33 @@ class Kraken():
         D = to_px(0.5, -0.1)
 
         self.widgets = {
-            "cpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.cpu_temp),
-            "cpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, data_updater=lambda: self.cpu_load, rot=0),
-            "cpu_temp_text": widgets.Text(lambda: f"{round(self.cpu_temp)}°C", font_path, 120, align="lb"),
-            "gpu_temp_line": widgets.LineGraphic(rect_width, line_width, data_updater=lambda: self.gpu_temp, rot=180),
-            "gpu_load_arc": widgets.ArcGraphic(170, arc_radius, line_width, data_updater=lambda: self.gpu_load, rot=180),
-            "gpu_temp_text": widgets.Text(lambda: f"{round(self.gpu_temp)}°C", font_path, 120, align="rt"),
-        }
-
-        # Define placement: (x, y) coordinates, which edge to align (offset from center) and rotation angle
-        self.widget_configs = {
-            "cpu_temp_line": (A[0], A[1]+1,                             "left",     0),
-            "cpu_load_arc":  (A[0], A[1] - arc_radius + line_width//2,  "center",   0),
-            "cpu_temp_text": (A[0], A[1] - arc_radius,                  "left",     0),
-            "gpu_temp_line": (D[0] - rect_width, D[1]-1,                "left",     0),
-            "gpu_load_arc":  (D[0], D[1] + arc_radius - line_width//2,  "center",   0),
-            "gpu_temp_text": (D[0], D[1] + arc_radius,                  "right",    0),
+            "cpu_temp_line": widgets.LineGraphic(
+                length=rect_width, line_width=line_width, pos=(A[0], A[1]+1),
+                data_updater=lambda: self.cpu_temp, corners=(False,True,True,False)
+            ),
+            "cpu_load_arc": widgets.ArcGraphic(
+                angle=170, radius=arc_radius, line_width=line_width,
+                pos=(A[0]-arc_radius-line_width//2, A[1] - 2*arc_radius + line_width//2),
+                ata_updater=lambda: self.cpu_load, rot=0
+            ),
+            "cpu_temp_text": widgets.Text(
+                text_source=lambda: f"{round(self.cpu_temp)}°C", font_path=font_path, font_size=120,
+                # pos=(A[0], A[1]), align="lb"
+                pos=to_px(-0.5, 0.1625), align="lb"
+            ),
+            "gpu_temp_line": widgets.LineGraphic(
+                length=rect_width, line_width=line_width,
+                pos=(D[0] - rect_width, D[1]-1),
+                data_updater=lambda: self.gpu_temp, rot=180,corners=(False,True,True,False)
+            ),
+            "gpu_load_arc": widgets.ArcGraphic(angle=170, radius=arc_radius, line_width=line_width,
+                pos=(D[0] - arc_radius - line_width//2, D[1] - line_width//2),
+                ata_updater=lambda: self.gpu_load, rot=180
+            ),
+            "gpu_temp_text": widgets.Text(
+                text_source=lambda: f"{round(self.gpu_temp)}°C", font_path=font_path, font_size=120,
+                pos=(D[0], D[1] + arc_radius), align="rt"
+            )
         }
 
         self._brightness = 50
@@ -224,16 +235,8 @@ class Kraken():
 
         for name, widget in self.widgets.items():
             widget.update()
-            x, y, align, rot = self.widget_configs[name]
-
-            # Adjust pasting position based on alignment
-            w_w, w_h = widget.bg.size
-            if align == "left":
-                widget.pos = (x, y - w_h // 2)
-            elif align == "right":
-                widget.pos = (x - w_w, y - w_h // 2)
-            else:  # center
-                widget.pos = (x - w_w // 2, y - w_h // 2)
+            x, y, rot = *widget.pos, widget.rot
+            w_w, w_h = widget.width, widget.height
 
             bg = widget.bg
             self._bg.paste(bg, widget.pos, bg)
@@ -246,7 +249,7 @@ class Kraken():
         self._fg = Image.new('RGBA', self._resolution, color=(0, 0, 0, 0))
         frame_changed = False
         for widget in self.widgets.values():
-            frame_changed |= bool(widget.update())
+            frame_changed = widget.update()
             fg = widget.fg
             if fg:
                 self._fg.paste(fg, widget.pos, fg)
@@ -325,19 +328,20 @@ class Kraken():
         if not self.debug and hasattr(self, 'device'):
             self.device.disconnect()
 
+
     def run(self):
         # Send data to display in a separate thread while the main loop updates the frames
         if not self.debug:
-            threading.Thread(target=kraken.display, daemon=True).start()
+            threading.Thread(target=self.display, daemon=True).start()
         while running:
             self.update_frames()
             if not self.debug:
                 time.sleep(1 / self._push_rate)
             else:
                 # The debugging mode is a direct display mode, that displays the UI in a Matplotlib plot
-                for frame in kraken._frames:
-                    kraken._ax.imshow(frame)
-                    plt.pause(1/kraken._fps)
+                for frame in self.frames:
+                    self._ax.imshow(frame)
+                    plt.pause(1/self._fps)
 
 
 
@@ -362,5 +366,4 @@ if __name__ == "__main__":
     signal.signal(signal.SIGTERM, handle_signal)
     signal.signal(signal.SIGINT, handle_signal)
 
-    kraken.init_frame()
     kraken.run()

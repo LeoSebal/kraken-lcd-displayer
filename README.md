@@ -36,6 +36,12 @@ Run `uninstall.sh`.
 
 This is due to liquidctl's driver, which is known to be unstable. Unfortunately, there is little I can do about this at this point, unless improving liquidctl's code directly, which is not my goal in the immediate term. If you have used CoolerControl, you may have noticed similar issues.
 
+I really tried my best to make it as stable as possible: error checking, dimnishing the number of sends, only updating when necessary... Despite that, the screen still turns to black regularly. If anyone has suggestions, I'm listening!
+
+### "Failed to switch active bucket" / Failed to setup bucket for data transfer"
+
+It's actually the same error as above, both are synchronized. If it's happening too often, try to reduce the push rate.
+
 ### About GIF support and why it's probably not coming
 
 Using liquidctl's API, you can send a GIF to the overlay, or you can send a static image. The data transfer rate of the Kraken display is through USB 2.0 (that's low, even for the 640x640 screen of the Kraken), and liquidctl's reverse-engineering doesn't allow overlaying of GIFs with static images or partial frame updates, which would be necessary for this to work. Moreover, updating a GIF resets the screen, which makes it blink every time a GIF is sent to the device.

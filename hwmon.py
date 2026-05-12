@@ -19,13 +19,43 @@ def get_cpu_load():
 
 
 
-def get_gpu_temp_nvidia():
+def _get_gpu_temp_nvidia():
     return pynvml.nvmlDeviceGetTemperature(_NV_HANDLE, pynvml.NVML_TEMPERATURE_GPU)
 
 
 
-def get_gpu_load_nvidia():
+def _get_gpu_load_nvidia():
     return pynvml.nvmlDeviceGetUtilizationRates(_NV_HANDLE).gpu
+
+
+
+def _get_gpu_temp_amd():
+    hwmon_path = Path("/sys/class/drm/card0/device/hwmon/")
+
+    try:
+        # There's usually one folder inside (e.g., hwmon3)
+        for hwmon_dir in hwmon_path.iterdir():
+            if hwmon_dir.is_dir():
+                temp_file = hwmon_dir / "temp1_input"
+                break
+    
+        with open(temp_file, "r") as f:
+            # Value is in millidegrees Celsius
+            return int(f.read().strip()) / 1000
+    except Exception:
+        return None
+
+
+
+def _get_gpu_load_amd():
+    # card0 is usually the first GPU
+    load_path = "/sys/class/drm/card0/device/gpu_busy_percent"
+
+    try:
+        with open(load_path, "r") as f:
+            return int(f.read().strip())
+    except Exception:
+        return 0
 
 
 
@@ -45,22 +75,26 @@ def get_gpu_brand() -> str:
     raise ValueError("Unable to determine GPU brand from lspci output.")
 
 
+_gpu_temp_fns = {
+    'nvidia': _get_gpu_temp_nvidia,
+    'intel': _get_gpu_temp_amd,
+    'amd': _get_gpu_temp_amd
+}
 
-gpu_brand = get_gpu_brand()
-match gpu_brand:
-    case 'nvidia':
-        import pynvml
-        global _NV_HANDLE
-        pynvml.nvmlInit()
-        _NV_HANDLE = pynvml.nvmlDeviceGetHandleByIndex(0)
+_gpu_load_fns = {
+    'nvidia': _get_gpu_load_nvidia,
+    'intel': _get_gpu_load_amd,
+    'amd': _get_gpu_load_amd
+}
 
-        get_gpu_temp = get_gpu_temp_nvidia
-        get_gpu_load = get_gpu_load_nvidia
 
-    case 'intel':
-        # raise NotImplementedError("GPU monitoring for Intel GPUs is not implemented yet.")
-        get_gpu_temp = lambda: randint(30, 70)  # Placeholder: return random temp between 30-70°C
-        get_gpu_load = lambda: randint(0, 100)  # Placeholder: return random load between 0-100%
+_gpu_brand = get_gpu_brand()
 
-    case 'amd':
-        raise NotImplementedError("GPU monitoring for Intel AMDs is not implemented yet.")
+if _gpu_brand == "nvidia":
+    import pynvml
+    global _NV_HANDLE
+    pynvml.nvmlInit()
+    _NV_HANDLE = pynvml.nvmlDeviceGetHandleByIndex(0)
+
+get_gpu_temp = _gpu_temp_fns[_gpu_brand]
+get_gpu_load = _gpu_load_fns[_gpu_brand]
